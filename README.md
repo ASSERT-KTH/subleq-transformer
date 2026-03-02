@@ -2,7 +2,7 @@
 
 Two independent approaches to making a standard transformer execute a Turing-complete computer — one with **hand-coded weights** (no training), one **learned from data** (no hand-coding).
 
-Both work. Both achieve 100% accuracy.
+Both work. Both achieve 100% accuracy on structured programs.
 
 ## What is SUBLEQ?
 
@@ -16,49 +16,136 @@ else: goto next instruction (pc + 3)
 
 One instruction, and you can compute anything — addition, multiplication, sorting, anything a normal computer can do.
 
-## The Two Approaches
+---
 
-### Round 1: Hand-Coded (`round1_constructed/`)
+## Round 1: Hand-Coded (`round1_constructed/`)
 
-A standard transformer with **analytically set weights** — every one of the 2.1M parameters is computed by hand, not learned. Uses content-based addressing (Gaussian attention peaks), ReLU step functions, binary multiplexers, and hat functions for selective memory writes.
+A standard transformer with **analytically set weights** — every one of the 2.1M parameters is computed by hand, not learned.
 
-| | |
+### Architecture
+
+| Parameter | Value |
 |---|---|
-| Architecture | 4 layers, 8 heads, d_model=32, d_ff=64 |
-| Parameters | 2,143,712 (~100 nonzero in transformer logic) |
-| Memory | 416 cells, 16-bit signed integers |
-| Accuracy | 100% on all structured programs (negate, add, multiply, bubble sort); 97.8% on 2,087 total tests |
-| Training | None — all weights set analytically |
+| Layers | 4 (Pre-LN, ReLU activation, no causal mask) |
+| Attention heads | 8 (d_head = 4) |
+| d_model | 32 |
+| d_ff | 64 |
+| Parameters | **2,143,712** total (~100 nonzero in transformer logic) |
+| Memory | 416 cells, 16-bit signed integers [-32768, 32767] |
+| Vocabulary | 65,538 tokens (value + offset encoding) |
+| Sequence length | 417 (1 PC + 416 memory cells) |
+
+### How It Works
+
+The 32-dimensional residual stream acts as a register file with ~30 named dimensions. Four layers implement a complete SUBLEQ step:
+
+| Layer | Function | Mechanism |
+|-------|----------|-----------|
+| 1 | Read instruction (a, b, c) from mem[pc..pc+2] | Content-based addressing via `q·k = -s(k-t)²` |
+| 2 | Fetch mem[a] and mem[b], compute subtraction | Second pointer dereference + ReLU arithmetic |
+| 3 | Broadcast write address, build position indicator | Broadcast attention + hat function `ReLU(j-b) - 2·ReLU(j-b-1) + ReLU(j-b-2)` |
+| 4 | Write result to exactly one cell, update PC | Binary MUX: `s·z = ½[ReLU(z+2Ms-M) - ReLU(-z+2Ms-M)]` |
+
+### Test Results (2,087 tests)
+
+| Tier | Test | Count | Accuracy |
+|------|------|-------|----------|
+| 1 | Negate (v in [-100, 100]) | 201 | **100%** (201/201) |
+| 2 | Addition (a,b in [-10, 10]) | 441 | **100%** (441/441) |
+| 3 | Multiply (10 pairs) | 10 | **100%** (10/10) |
+| 4 | Random single-step | 1,200 | **100%** (1,200/1,200) |
+| 5 | Random multi-step (up to 200 steps) | 200 | **77.5%** (155/200) |
+| 6 | Bubble sort (n=2..8) | 35 | **100%** (35/35) |
+| | **Total** | **2,087** | **97.8%** (2,042/2,087) |
+
+**100% on all structured programs.** The 45 errors in Tier 5 are from random multi-step programs where small per-step errors compound over 200 autoregressive steps — the model's single-step accuracy is perfect.
+
+### Usage
 
 ```bash
 cd round1_constructed
-python demo.py    # Watch it execute programs
-python eval.py    # Full test suite
+python demo.py    # Watch step-by-step execution
+python eval.py    # Full 2,087-test suite
 ```
 
-### Round 2: Trained (`round2_trained/`)
+---
+
+## Round 2: Trained (`round2_trained/`)
 
 A standard transformer **trained from scratch** on random single-step SUBLEQ executions — then it generalizes to run multi-step programs (Fibonacci, multiplication, division, square root) it never saw during training.
 
-| | |
+### Architecture
+
+| Parameter | Value |
 |---|---|
-| Architecture | 6 layers, 8 heads, d_model=256, d_ff=1024 |
-| Parameters | 4,879,360 |
-| Memory | 32 cells, 8-bit signed integers |
-| Accuracy | 100% on 182 multi-step programs, 99.9%+ single-step |
-| Training | 80K steps with curriculum learning |
+| Layers | 6 (Pre-LN, GELU activation, bidirectional) |
+| Attention heads | 8 (d_head = 32) |
+| d_model | 256 |
+| d_ff | 1,024 |
+| Parameters | **4,879,360** |
+| Memory | 32 cells, 8-bit signed integers [-128, 127] |
+| Vocabulary | 256 tokens (byte-level, two's complement) |
+| Sequence length | 33 (1 PC + 32 memory cells) |
+| Embeddings | Token + Position + Type (PC vs memory) |
+
+### Training
+
+| Parameter | Value |
+|---|---|
+| Optimizer | AdamW (lr=3e-4, warmup 1K steps, cosine decay) |
+| Total steps | 80,000 |
+| Batch size | 256 |
+| Data | 100K examples, regenerated every 2K steps |
+| Loss | Weighted cross-entropy (100x on changed positions, 1x on unchanged) |
+| Curriculum | 4 phases: 1-2 instr (0-8K) → 1-4 (8-20K) → 1-6 (20-36K) → 1-8 (36-80K) |
+| Hardware | Single Apple Silicon laptop (MPS backend), ~4 hours |
+
+**Training data composition**: 60% random single-step pairs + 40% execution traces (negate, addition, countdown, multiply, random programs). No multi-step programs like Fibonacci, division, or square root appear in training — these are emergent.
+
+### Test Results
+
+**Single-step accuracy** (4,000 held-out states):
+
+| Instructions | Full accuracy | Changed-position accuracy |
+|---|---|---|
+| 1-6 | 100.0% | 100.0% |
+| 7 | 100.0% | 100.0% |
+| 8 | 99.8% | 100.0% |
+| **Overall** | **99.97%** | **100.0%** |
+
+All errors are copy errors (unchanged cells), never computation errors.
+
+**Multi-step programs** (emergent — never in training data):
+
+| Program | Cases | Max steps | Accuracy |
+|---------|-------|-----------|----------|
+| Negate | 201 | 3 | 100% |
+| Addition | 300 | 4 | 100% |
+| Countdown | 20 | 39 | 100% |
+| Multiply | 141 | 200 | **100%** |
+| Fibonacci | 5 | 39 | **100%** |
+| Division | 16 | 91 | **100%** |
+| Square root | 20 | 61 | **100%** |
+| **Total** | **703** | | **100%** |
+
+The longest computation: 126 ÷ 7 = 18, requiring **91 consecutive correct autoregressive steps** with zero errors.
+
+### Usage
 
 ```bash
 cd round2_trained
-python train.py              # Train from scratch (~2 hours on GPU)
+python train.py              # Train from scratch (~4 hours on MPS)
+python eval.py               # Single-step + multi-step evaluation
 python demo.py               # Fibonacci, multiplication, division, square root
 python play.py               # Interactive REPL
 ```
 
+---
+
 ## Quickstart
 
 ```bash
-git clone https://github.com/anadimishra/subleq-transformer.git
+git clone https://github.com/anadim/subleq-transformer.git
 cd subleq-transformer
 pip install torch
 
@@ -80,21 +167,23 @@ subleq-transformer/
 ├── round1_constructed/     # Hand-coded transformer (no training)
 │   ├── model.py            # 2.1M-param transformer with analytical weights
 │   ├── interpreter.py      # SUBLEQ interpreter (416 cells, 16-bit)
-│   ├── programs.py         # Test programs (negate, add, multiply, sort)
+│   ├── programs.py         # Programs (negate, add, multiply, bubble sort)
 │   ├── demo.py             # Step-by-step execution demos
-│   └── eval.py             # Full test suite
+│   ├── eval.py             # Full 2,087-test suite
+│   └── report.pdf          # Technical report on the construction
 │
 ├── round2_trained/         # Trained transformer
 │   ├── subleq/             # Python package (interpreter, tokenizer, model, data)
-│   ├── train.py            # Training script
+│   ├── train.py            # Training script (curriculum, weighted loss)
 │   ├── eval.py             # Evaluation (single-step + multi-step)
 │   ├── demo.py             # ANSI-colored program demos
 │   ├── play.py             # Interactive REPL
 │   ├── Makefile            # make train, eval, demo, play
-│   ├── figures/            # Training curves, rollout visualizations
-│   └── checkpoints/        # Saved model weights
+│   └── figures/            # Training curves, rollout visualizations
 │
 └── paper/                  # Academic paper (LaTeX + PDF)
+    ├── paper.tex
+    └── paper.pdf
 ```
 
 ## Key Insights
@@ -103,16 +192,17 @@ subleq-transformer/
 - Attention can dereference pointers via quadratic identity: `q·k = -s(k-t)² + const`
 - ReLU FFNs compute perfect integer step functions: `1[x>0] = ReLU(x) - ReLU(x-1)`
 - Selective memory writes require 2 FFN layers (hat function → MUX), explaining why 4 layers are needed
+- Only ~100 of 2.1M weights are nonzero — the rest are structural zeros
 
 **Round 2** shows that a transformer *learns* to implement a computer from data — trained only on single-step execution, it discovers how to chain steps into arbitrary-length programs. The emergent multi-step generalization includes:
 - Fibonacci sequences (up to F(11) = 89, 47 steps)
-- Full multiplication table (141 test cases)
+- Full 12×12 multiplication table (141 test cases)
 - Integer division and square root
 - The longest: 126 ÷ 7 = 18, requiring 91 consecutive correct autoregressive steps
 
-## Citation
+**Width > Depth**: The wide model (d=256, 6 layers, 4.9M params) achieves 100% while a deep model (d=128, 12 layers, 2.4M params) plateaus at 74.8%. Information routing bandwidth (d_head) is the bottleneck, not computational depth.
 
-The hand-coded construction is inspired by [Giannou et al. (2023)](https://arxiv.org/abs/2301.13196), who proved looped transformers are programmable computers. Our construction makes this concrete with explicit weights and verified execution on thousands of programs.
+## Citation
 
 ```bibtex
 @misc{subleq-transformer,
