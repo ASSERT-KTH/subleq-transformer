@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Generate 3 blog figures for the 'What Claude Code Built' section."""
 
+import os
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -96,7 +97,7 @@ ax.set_ylim(10, 103)
 ax.set_yticks([20, 40, 60, 80, 100])
 
 plt.tight_layout()
-plt.savefig('/Users/anadim/subleq-transformer/fig1_training_curve.png', dpi=200, bbox_inches='tight')
+plt.savefig(os.path.join(os.path.dirname(__file__), 'fig1_training_curve.png'), dpi=200, bbox_inches='tight')
 print("Saved fig1_training_curve.png")
 plt.close()
 
@@ -159,7 +160,7 @@ ax.legend(handles=legend_elements, loc='upper left', title='Model Width',
           title_fontsize=12)
 
 plt.tight_layout()
-plt.savefig('/Users/anadim/subleq-transformer/fig2_width_vs_depth.png', dpi=200, bbox_inches='tight')
+plt.savefig(os.path.join(os.path.dirname(__file__), 'fig2_width_vs_depth.png'), dpi=200, bbox_inches='tight')
 print("Saved fig2_width_vs_depth.png")
 plt.close()
 
@@ -234,7 +235,7 @@ ax.text(6, -1.3, 'Gray cells = overflow (exceed 8-bit range), not tested',
         ha='center', fontsize=10, color=GRAY, fontstyle='italic')
 
 plt.tight_layout()
-plt.savefig('/Users/anadim/subleq-transformer/fig3_multiplication_table.png', dpi=200, bbox_inches='tight')
+plt.savefig(os.path.join(os.path.dirname(__file__), 'fig3_multiplication_table.png'), dpi=200, bbox_inches='tight')
 print("Saved fig3_multiplication_table.png")
 plt.close()
 
