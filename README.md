@@ -58,7 +58,7 @@ The 32-dimensional residual stream acts as a register file with ~30 named dimens
 | 6 | Bubble sort (n=2..8) | 35 | **100%** (35/35) |
 | | **Total** | **2,087** | **97.8%** (2,042/2,087) |
 
-**100% on all structured programs.** The 45 errors in Tier 5 are from random multi-step programs where small per-step errors compound over 200 autoregressive steps — the model's single-step accuracy is perfect.
+**100% on all structured programs.** The 45 errors in Tier 5 are from random multi-step programs where small per-step errors compound over 200 iterative steps — the model's single-step accuracy is perfect.
 
 ### Usage
 
@@ -128,7 +128,7 @@ All errors are copy errors (unchanged cells), never computation errors.
 | Square root | 20 | 61 | **100%** |
 | **Total** | **703** | | **100%** |
 
-The longest computation: 126 ÷ 7 = 18, requiring **91 consecutive correct autoregressive steps** with zero errors.
+The longest computation: 126 ÷ 7 = 18, requiring **91 consecutive correct iterative steps** with zero errors.
 
 ### Usage
 
@@ -198,7 +198,7 @@ subleq-transformer/
 - Fibonacci sequences (up to F(11) = 89, 47 steps)
 - Full 12×12 multiplication table (141 test cases)
 - Integer division and square root
-- The longest: 126 ÷ 7 = 18, requiring 91 consecutive correct autoregressive steps
+- The longest: 126 ÷ 7 = 18, requiring 91 consecutive correct iterative steps
 
 **Width > Depth**: The wide model (d=256, 6 layers, 4.9M params) achieves 100% while a deep model (d=128, 12 layers, 2.4M params) plateaus at 74.8%. Information routing bandwidth (d_head) is the bottleneck, not computational depth.
 

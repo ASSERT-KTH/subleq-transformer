@@ -98,7 +98,7 @@ Programs marked with † were **never in training data** — these are emergent 
 | Square root† | 20 | 61 | **100%** |
 | **Total** | **703** | | **100%** |
 
-Longest computation: **126 ÷ 7 = 18**, requiring 91 consecutive correct autoregressive steps with zero errors.
+Longest computation: **126 ÷ 7 = 18**, requiring 91 consecutive correct iterative steps with zero errors.
 
 ### Scaling: Width > Depth
 

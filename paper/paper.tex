@@ -241,7 +241,7 @@ We test the hand-coded model on 2{,}087 cases spanning six tiers:
 \end{table}
 
 The model achieves 100\% on all structured programs and 100\% on random single-step tests.
-The 45 failures in Tier~5 are from error accumulation over 200 autoregressive steps on random programs---since the model is applied autoregressively, any per-step rounding imprecision in floating-point arithmetic compounds over many steps.
+The 45 failures in Tier~5 are from error accumulation over 200 iterative steps on random programs---since the model is applied in a loop (output fed back as input), any per-step rounding imprecision in floating-point arithmetic compounds over many steps.
 Single-step accuracy is perfect.
 
 Notably, the bubble sort programs use \emph{self-modifying SUBLEQ code}---the program writes memory addresses into its own instruction fields at runtime to index into arrays, since SUBLEQ has no indirect addressing.
@@ -271,7 +271,7 @@ Each signed integer $v \in [-128, 127]$ is encoded as its unsigned byte represen
 This byte-level encoding was chosen over the alternative of using one token per distinct integer value for two reasons: (1)~it keeps the vocabulary small and fixed at 256 regardless of the value range, and (2)~it provides a natural scaling path---extending to 16-bit or 32-bit values requires only increasing the bytes-per-value while reusing the same 256-token vocabulary.
 
 The model's task is sequence-to-sequence prediction: given $\mathbf{x}_t$, predict $\mathbf{x}_{t+1}$.
-At inference time, the predicted output is fed back as input, enabling autoregressive multi-step execution.
+At inference time, the predicted output is fed back as input, enabling iterative multi-step execution (one forward pass per SUBLEQ step, looped until halt).
 
 % ============================================================
 \section{Model Architecture}
@@ -789,7 +789,7 @@ We test on five program families, of which three (\textbf{multiply}, \textbf{Fib
 
 \begin{table}[h]
 \centering
-\caption{Multi-step program execution accuracy. Programs marked with $\dagger$ were never present in the training data in any form---these are emergent capabilities. Steps indicates the maximum number of autoregressive model invocations required.}
+\caption{Multi-step program execution accuracy. Programs marked with $\dagger$ were never present in the training data in any form---these are emergent capabilities. Steps indicates the maximum number of iterative forward passes (looped inference) required.}
 \label{tab:multistep}
 \begin{tabular}{lccrcc}
 \toprule
@@ -884,7 +884,7 @@ This suggests that the wide model's residual errors are concentrated on atypical
 
 \begin{observation}[Error Compounding Determines Multi-Step Reliability]
 A $4\times$ reduction in single-step error rate (from 0.2\% to 0.05\%) translates to the difference between 75\% and 100\% on 91-step programs.
-For autoregressive systems, per-step accuracy in the 99.9\%+ regime is qualitatively different from 99.8\%---it is the threshold at which long programs become reliably executable.
+For iteratively looped systems, per-step accuracy in the 99.9\%+ regime is qualitatively different from 99.8\%---it is the threshold at which long programs become reliably executable.
 \end{observation}
 
 % ============================================================
@@ -935,7 +935,7 @@ The wide model produces the complete $12 \times 12$ multiplication table with 14
   \node[font=\tiny, gray] at (12, -12) {--};
   \node[font=\small, anchor=north] at (6.5, -13) {141/141 correct (gray = overflow, omitted)};
 \end{tikzpicture}
-\caption{Complete multiplication table computed by the model via autoregressive SUBLEQ execution. Each entry requires $\sim$3$b$ steps of autoregressive inference. This program was never in the training data.}
+\caption{Complete multiplication table computed by the model via looped SUBLEQ execution. Each entry requires $\sim$3$b$ iterative forward passes. This program was never in the training data.}
 \label{fig:multiply}
 \end{figure}
 
@@ -979,7 +979,7 @@ $a$ & $b$ & $a/b$ & Steps & & $n$ & $\lfloor\sqrt{n}\rfloor$ & Model & Steps & \
 \end{center}
 
 All 16 division cases and all 20 square root cases are correct.
-The longest computation (126 $\div$ 7 = 18) requires 91 autoregressive steps---91 consecutive correct SUBLEQ step predictions with zero errors.
+The longest computation (126 $\div$ 7 = 18) requires 91 iterative steps---91 consecutive correct SUBLEQ step predictions with zero errors.
 
 % ============================================================
 \section{What Made a Difference}
@@ -1071,7 +1071,7 @@ The model learned the complete SUBLEQ execution algorithm: pointer dereferencing
 The evidence for genuine algorithm learning (rather than pattern matching) is threefold:
 (1)~100\% changed-position accuracy across all instruction counts,
 (2)~correct execution of programs never seen during training,
-and (3)~correct execution over long horizons (up to 91 autoregressive steps).
+and (3)~correct execution over long horizons (up to 91 iterative steps).
 
 \paragraph{The copy bottleneck.}
 The dominant failure mode is copy errors on unchanged positions---not computational errors.
@@ -1081,7 +1081,7 @@ The finding that width resolves this bottleneck suggests that copy accuracy is l
 \paragraph{Limitations.}
 The current system has 32 cells of 8-bit values---sufficient for interesting programs but far from practical scale.
 The byte-level tokenization provides a path to 16-bit and 32-bit values (by increasing bytes-per-value), but scaling to thousands of memory cells would require architectural changes (e.g., sparse attention or memory-augmented architectures).
-Additionally, the programs tested here are relatively short; it remains open whether the model would maintain reliability over thousands of autoregressive steps.
+Additionally, the programs tested here are relatively short; it remains open whether the model would maintain reliability over thousands of iterative steps.
 
 \paragraph{Reproducibility.}
 All experiments were conducted on a single Apple Silicon laptop (M3, 16GB) using PyTorch with the MPS backend.

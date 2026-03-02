@@ -34,7 +34,7 @@ def model_step(model, mem, pc):
 
 
 def model_run(model, mem, pc, max_steps=5000):
-    """Run the model autoregressively until halt or max_steps."""
+    """Run the model iteratively (looped) until halt or max_steps."""
     m, p = list(mem), pc
     for s in range(max_steps):
         if p < 0 or p + 2 >= MEM_SIZE:

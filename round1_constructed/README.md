@@ -52,7 +52,7 @@ The 32-dimensional residual stream acts as a register file with ~30 named dimens
 | 6 | Bubble sort | 35 | **100%** | Self-modifying code, n=2..8, up to 2380 steps |
 | | **Total** | **2,087** | **97.8%** |
 
-The 45 Tier 5 failures are from error accumulation over many autoregressive steps on random programs. All structured programs (Tiers 1-4, 6) achieve perfect accuracy.
+The 45 Tier 5 failures are from error accumulation over many iterative steps on random programs. All structured programs (Tiers 1-4, 6) achieve perfect accuracy.
 
 ## Usage
 

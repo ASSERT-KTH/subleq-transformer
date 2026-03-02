@@ -26,7 +26,7 @@ RESET = "\033[0m"
 
 
 def model_run_verbose(model, mem, pc, name, result_addr=None, max_steps=500):
-    """Run model autoregressively with step-by-step output."""
+    """Run model iteratively (looped) with step-by-step output."""
     print(f"\n{CYAN}{BOLD}{'='*60}")
     print(f"  {name}")
     print(f"{'='*60}{RESET}")
