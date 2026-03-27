@@ -12,6 +12,7 @@ Figures:
   fig7_localization.png            - Dimensional localization curves
   fig8_dynamics.png                - Training dynamics (accuracy vs fraction)
   fig9_failure_trace.png           - Step-by-step probe trace for failure case
+  fig10_constrained_probe.png      - Constrained model probe comparison (ln vs no_ln)
 """
 
 import os
@@ -552,6 +553,86 @@ def fig9_failure_trace(phase6_trace_path, output_path):
     savefig(fig, output_path)
 
 
+# ── Fig 10: Constrained model probe comparison ───────────────────────────────
+
+def fig10_constrained_probe(constrained_summary_path, phase1_path, output_path):
+    """
+    4-panel heatmap: Oracle | Constrained-LN | Constrained-noLN | Trained.
+    All at pos0, best metric per layer.
+    Skips gracefully if constrained_summary_path doesn't exist.
+    """
+    if not os.path.exists(constrained_summary_path):
+        print(f"  Skipping Fig 10: {constrained_summary_path} not found")
+        return
+
+    with open(constrained_summary_path) as f:
+        cdata = json.load(f)
+    with open(phase1_path) as f:
+        oracle_data = json.load(f)
+
+    is_cls = [t == 'branch_taken' for t in TARGETS]
+
+    # Oracle matrix (n_layers=5: embed + 4 blocks)
+    probe_summary_oracle = oracle_data.get('probe_summary', {})
+    n_oracle = max(int(k) for k in probe_summary_oracle.keys()) + 1
+    mat_oracle = np.full((len(TARGETS), n_oracle), np.nan)
+    for j in range(n_oracle):
+        ld = probe_summary_oracle.get(str(j), {})
+        for i, t in enumerate(TARGETS):
+            v = ld.get(t)
+            if v is not None:
+                mat_oracle[i, j] = v
+
+    panels = [('Oracle (constructed)', mat_oracle, n_oracle)]
+
+    for variant_key, title in [('ln', 'Constrained-LN (trained)'),
+                                ('no_ln', 'Constrained-noLN (trained)')]:
+        vdata = cdata.get(variant_key, {})
+        probe_means = vdata.get('probe_means', {})
+        if not probe_means:
+            # Build empty panel
+            panels.append((title, np.full((len(TARGETS), 5), np.nan), 5))
+            continue
+        n_l = max(int(k) for t in probe_means.values() for k in t.keys()) + 1
+        mat = np.full((len(TARGETS), n_l), np.nan)
+        for i, tname in enumerate(TARGETS):
+            tdata = probe_means.get(tname, {})
+            for j in range(n_l):
+                entry = tdata.get(str(j))
+                if entry:
+                    mat[i, j] = entry['mean']
+        panels.append((title, mat, n_l))
+
+    # Note: no trained-model panel here to keep width manageable (it's already in fig3)
+    n_panels = len(panels)
+    fig, axes = plt.subplots(1, n_panels, figsize=(5 * n_panels, 4))
+    if n_panels == 1:
+        axes = [axes]
+
+    vmin, vmax = 0.0, 1.0
+    for ax, (title, mat, n_l) in zip(axes, panels):
+        display = np.clip(mat, vmin, vmax)
+        im = ax.imshow(display, cmap=CMAP_PROBE, vmin=vmin, vmax=vmax, aspect='auto')
+        ax.set_xticks(range(n_l))
+        ax.set_xticklabels([f'L{j}' for j in range(n_l)], fontsize=9)
+        ax.set_yticks(range(len(TARGETS)))
+        ax.set_yticklabels(TARGET_LABELS, fontsize=9)
+        ax.set_title(title, fontsize=10)
+        ax.set_xlabel('Layer')
+        for i in range(len(TARGETS)):
+            for j in range(n_l):
+                v = mat[i, j]
+                if np.isnan(v):
+                    continue
+                color = 'white' if display[i, j] > 0.65 else 'black'
+                ax.text(j, i, f'{v:.2f}', ha='center', va='center',
+                        fontsize=7, color=color, fontweight='bold')
+        fig.colorbar(im, ax=ax, fraction=0.04, pad=0.02)
+
+    fig.suptitle('Linear Probe Heatmaps: Oracle vs Constrained Architectures', fontsize=12)
+    savefig(fig, output_path)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -623,6 +704,13 @@ def main():
     fig9_failure_trace(
         os.path.join(R, 'phase6_failure_trace.json'),
         os.path.join(O, 'fig9_failure_trace.png'),
+    )
+
+    print("Fig 10: Constrained model probe comparison")
+    fig10_constrained_probe(
+        os.path.join(R, 'phase2_constrained_summary.json'),
+        os.path.join(R, 'phase1_oracle.json'),
+        os.path.join(O, 'fig10_constrained_probe.png'),
     )
 
     print(f"\nAll figures saved to {O}/")

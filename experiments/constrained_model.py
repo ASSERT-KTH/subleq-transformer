@@ -25,6 +25,9 @@ from subleq.tokenizer import SEQ_LEN, VOCAB_SIZE
 
 class Identity(nn.Module):
     """Drop-in replacement for LayerNorm when layer_norm=False."""
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+
     def forward(self, x):
         return x
 
