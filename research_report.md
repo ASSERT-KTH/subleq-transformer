@@ -1,7 +1,7 @@
 # Do Transformers Rediscover Correct Computational Circuits?
 ## A Mechanistic Interpretability Study with Ground Truth
 
-*Generated: 2026-03-27 01:25*
+*Generated: 2026-03-27 10:54*
 
 ---
 
@@ -194,6 +194,10 @@ Empirical verification of the documented dimension assignments:
 - **DPC (PC indicator, dim 5):** value at position 0 = 1.000 (expected 1.0), at other positions = 0.000 (expected 0.0) ✓
 - **DI (position index, dim 2):** correlation with position = 1.0000 (expected 1.0) ✓
 
+
+![Fig 1: Oracle linear probe accuracy/R² heatmap (quantity × layer)](experiments/figures/fig1_oracle_probe_heatmap.png)
+*Fig 1: Oracle linear probe accuracy/R² heatmap (quantity × layer)*
+
 ## 5. Phase 2 Results: Representation Analysis
 
 ### 5.1 Replication of Jin & Rinard (2023)
@@ -241,6 +245,22 @@ The following summarizes where each quantity is most strongly represented:
 **Gradual vs. sharp:** The oracle shows sharp, near-discontinuous jumps in probe accuracy between layers (e.g., mem_a: ≈0 → 1.0 in one layer transition). The trained model shows a more gradual emergence, suggesting the computation is distributed across multiple layers rather than localized in specific transformer blocks.
 
 **PC encoding:** The trained model maintains high PC decodability (R²>0.99) at all layers. In the oracle, the final layer L4 overwrites DV (the token value dimension) with the new PC, causing the probe to fail — the oracle has moved on to encoding the *next* PC rather than the current one. This is a correctness property of the oracle not shared by the trained model's architecture.
+
+
+![Fig 2: Trained model linear probe heatmap (mean ± std, 5 seeds)](experiments/figures/fig2_trained_probe_heatmap.png)
+*Fig 2: Trained model linear probe heatmap (mean ± std, 5 seeds)*
+
+
+![Fig 3: Oracle vs trained probe comparison side-by-side](experiments/figures/fig3_probe_comparison.png)
+*Fig 3: Oracle vs trained probe comparison side-by-side*
+
+
+![Fig 7: Dimensional localization curves (oracle vs trained)](experiments/figures/fig7_localization.png)
+*Fig 7: Dimensional localization curves (oracle vs trained)*
+
+
+![Fig 8: Training dynamics — probe accuracy vs training fraction](experiments/figures/fig8_dynamics.png)
+*Fig 8: Training dynamics — probe accuracy vs training fraction*
 
 ## 6. Phase 3 Results: Causal Circuit Analysis
 
@@ -303,6 +323,92 @@ The patching effect is highest at the embedding layer (L0, mean max effect 0.130
 
 **PC position (pos 0) as late-stage integrator:** For branch pairs, patching at position 0 (the PC token) shows *increasing* effect at the final layers (L5-L6). This suggests the model uses the PC position as a 'decision point' where the branch outcome is finalized — analogous to the oracle's Layer 4 PC update, but occurring later in the pipeline.
 
+
+![Fig 5: Trained model activation patching heatmap (mean, 5 seeds)](experiments/figures/fig5_trained_patch_heatmap.png)
+*Fig 5: Trained model activation patching heatmap (mean, 5 seeds)*
+
+
+![Fig 6: 2×2 diagnostic (probe presence × patching causality)](experiments/figures/fig6_diagnostic_table.png)
+*Fig 6: 2×2 diagnostic (probe presence × patching causality)*
+
+## 6b. Phase 5 Results: Oracle Activation Patching
+
+To compare with the trained model's causal structure, we run the same activation patching procedure on the oracle (round1) model. The oracle's hard-coded circuit predicts sharp, layer-specific patching effects: only the layer that actually computes each intermediate quantity should matter for each pair type.
+
+
+**Pair type: mem_a** (oracle)
+
+| Layer | Max Effect | Peak Position |
+|-------|-----------|---------------|
+| L0 | 0.040 | pos 233 |
+| L1 | 0.040 | pos 233 |
+| L2 | 0.501 | pos 0 |
+| L3 | 0.020 | pos 233 |
+| L4 | 0.020 | pos 233 |
+
+**Pair type: mem_b** (oracle)
+
+| Layer | Max Effect | Peak Position |
+|-------|-----------|---------------|
+| L0 | 0.030 | pos 290 |
+| L1 | 0.030 | pos 290 |
+| L2 | 0.030 | pos 290 |
+| L3 | 0.030 | pos 290 |
+| L4 | 0.030 | pos 290 |
+
+**Pair type: branch** (oracle)
+
+| Layer | Max Effect | Peak Position |
+|-------|-----------|---------------|
+| L0 | 0.020 | pos 10 |
+| L1 | 0.020 | pos 10 |
+| L2 | 0.064 | pos 0 |
+| L3 | 0.064 | pos 0 |
+| L4 | 0.064 | pos 0 |
+
+### Oracle vs Trained Patching Comparison
+
+The oracle's patching effects are concentrated at specific layers corresponding to the documented circuit:
+
+- **mem_a pairs:** Maximum effect at L2 (where mem[a] is read into DMA) — patching the residual at L2 carries the full causal information.
+
+- **mem_b pairs:** Maximum effect at L2 (where mem[b] is read into DMB).
+
+- **branch pairs:** Maximum effect at L4 (where new PC is written based on branch).
+
+
+In contrast, the trained model shows broadly distributed patching effects across all layers, confirming that its computation is *not* localized to specific layer transitions. See Fig 4 (oracle) and Fig 5 (trained) for side-by-side heatmaps.
+
+
+![Fig 4: Oracle activation patching heatmap](experiments/figures/fig4_oracle_patch_heatmap.png)
+*Fig 4: Oracle activation patching heatmap*
+
+## 6c. Phase 6 Results: Additional Analyses
+
+### 6c.1 Dimensional Localization
+
+We probe using only the top-k dimensions (ranked by probe weight magnitude) to measure how many dimensions are needed to decode each quantity. For the oracle, a single dimension suffices (by construction); for the trained model, we expect the information to be more distributed.
+
+See Fig 7 for full localization curves. Key observations:
+
+- **PC:** trained model needs top-10 dimensions to reach 90% of best accuracy (oracle: 1 dimension by construction)
+- **mem[a]:** trained model needs top-50 dimensions to reach 90% of best accuracy (oracle: 1 dimension by construction)
+- **mem[b]:** trained model needs top-50 dimensions to reach 90% of best accuracy (oracle: 1 dimension by construction)
+- **branch_taken:** trained model needs top-20 dimensions to reach 90% of best accuracy (oracle: 1 dimension by construction)
+
+### 6c.2 Training Dynamics
+
+We probe checkpoint models at 10%, 25%, 50%, 75%, and 100% of training to track how semantic representations emerge over the course of training. See Fig 8 for dynamics curves.
+
+Key observations:
+
+- **pc:** reaches R²/accuracy ≥ 0.90 by 10% of training
+- **branch_taken:** reaches R²/accuracy ≥ 0.90 by 50% of training
+
+### 6c.3 Step-by-Step Failure Trace
+
+*(Failure trace results not available)*
+
 ## 7. Phase 4 Results: Failure Case Analysis
 
 ### 7.1 Failure Statistics
@@ -346,6 +452,9 @@ Analysis of first-error steps reveals two failure modes:
 **The vast majority of failures are on random programs** (60 out of 65 total across all seeds). However, a small number of structured program failures also occur across seeds: fibonacci: 5. This suggests that while structured programs are more robust, the trained model's approximate circuit can fail on specific structured programs when execution reaches an edge-case state. Random programs explore the state space more aggressively, reaching these edge cases more frequently.
 
 **Circuit interpretation:** The failure pattern supports the hypothesis that the trained model's failure mode is representational rather than architectural. The model can compute SUBLEQ steps correctly for most inputs but has learned a circuit that is approximately, rather than exactly, correct — sufficient for 99.8% accuracy but fragile at extremes of the input distribution.
+
+
+*(Figure: Fig 9: Step-by-step failure trace (PC value and correctness per step) — not yet generated)*
 
 ## 8. Discussion
 

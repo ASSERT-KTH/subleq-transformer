@@ -380,44 +380,26 @@ def main():
             else:
                 seed0_probes = {}
 
-            # Get consistent failures from phase4
-            consistent_failures = {}
-            seed_results = phase4_data.get('results', phase4_data)
-            # Handle different pickle formats
-            if isinstance(seed_results, dict) and 0 in seed_results:
-                seed0_failures = seed_results[0].get('failures', [])
-            else:
-                seed0_failures = phase4_data.get('failures', [])
-
-            # Try to get failure programs from the data
+            # Get failure programs from seed 0 of phase4 pickle
+            # Structure: {seed_id: {'failures': [{'name', 'mem_init', 'pc_init', ...}]}}
             failure_programs = []
-            if isinstance(phase4_data, dict):
-                for key in ['consistent_failures', 'failures', 'all_failures']:
-                    if key in phase4_data:
-                        fp = phase4_data[key]
-                        if isinstance(fp, list):
-                            failure_programs = fp[:3]  # trace first 3
-                        break
-
-            # If we couldn't find programs, reconstruct from phase4 summary JSON
-            if not failure_programs:
-                phase4_json = os.path.join(results_dir, 'phase4_summary.json')
-                if os.path.exists(phase4_json):
-                    with open(phase4_json) as f:
-                        phase4_summary = json.load(f)
-                    consistent = phase4_summary.get('consistent_failures', {})
-                    print(f"  Found {len(consistent)} consistent failures in summary")
-                    # Reconstruct from test programs using the known names
-                    from subleq import (make_negate, make_addition, make_countdown,
-                                        make_multiply, make_fibonacci,
-                                        generate_random_program)
-                    test_cases = []
-                    for name, seeds_failed in list(consistent.items())[:3]:
-                        if name.startswith('random_'):
-                            idx = int(name.split('_')[1])
-                            mem, pc = generate_random_program(seed=idx)
-                            test_cases.append({'name': name, 'memory': list(mem), 'pc': pc})
-                    failure_programs = test_cases
+            if isinstance(phase4_data, dict) and 0 in phase4_data:
+                seed0_failures = phase4_data[0].get('failures', [])
+                # Find programs that failed in all (or most) seeds
+                failure_counts = {}
+                for seed_id, seed_data in phase4_data.items():
+                    for f in seed_data.get('failures', []):
+                        name = f.get('name', '')
+                        failure_counts[name] = failure_counts.get(name, 0) + 1
+                # Pick top consistent failures
+                consistent_names = sorted(failure_counts, key=lambda n: -failure_counts[n])[:3]
+                for fail in seed0_failures:
+                    if fail.get('name') in consistent_names:
+                        failure_programs.append({
+                            'name': fail['name'],
+                            'memory': fail.get('mem_init', []),
+                            'pc': fail.get('pc_init', 0),
+                        })
 
             trace_results = {}
             for prog in failure_programs[:3]:
