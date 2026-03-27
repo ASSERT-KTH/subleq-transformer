@@ -1,7 +1,7 @@
 # Do Transformers Rediscover Correct Computational Circuits?
 ## A Mechanistic Interpretability Study with Ground Truth
 
-*Generated: 2026-03-27 10:54*
+*Generated: 2026-03-27 12:35*
 
 ---
 
@@ -407,7 +407,11 @@ Key observations:
 
 ### 6c.3 Step-by-Step Failure Trace
 
-*(Failure trace results not available)*
+We trace program `random_25`, one of the 10 programs that fail across all 5 seeds, step by step. The model runs correctly for 9 steps before producing the first incorrect output
+ at step 9 (PC=6, pred_pc=9, true_pc=6).
+
+
+See Fig 9 for the step-by-step trace. The failure pattern is consistent with the representational hypothesis: the model's distributed circuit accumulates small errors across steps until the prediction deviates from the ground truth.
 
 ## 7. Phase 4 Results: Failure Case Analysis
 
@@ -454,7 +458,8 @@ Analysis of first-error steps reveals two failure modes:
 **Circuit interpretation:** The failure pattern supports the hypothesis that the trained model's failure mode is representational rather than architectural. The model can compute SUBLEQ steps correctly for most inputs but has learned a circuit that is approximately, rather than exactly, correct — sufficient for 99.8% accuracy but fragile at extremes of the input distribution.
 
 
-*(Figure: Fig 9: Step-by-step failure trace (PC value and correctness per step) — not yet generated)*
+![Fig 9: Step-by-step failure trace (PC value and correctness per step)](experiments/figures/fig9_failure_trace.png)
+*Fig 9: Step-by-step failure trace (PC value and correctness per step)*
 
 ## 8. Discussion
 
