@@ -2,15 +2,24 @@
 """
 Phase 5: Activation patching on the oracle (round1) model.
 
-Mirrors the phase3 patching procedure on the oracle model
-so that patching heatmaps can be compared side-by-side.
+Mirrors the phase3 focused patching procedure on the oracle model.
 
 Oracle architecture: 4 layers, 8 heads, d_model=32, SEQ_LEN=417.
-Token encoding: value + 32768 (VALUE_OFFSET).
+Token encoding: value + VALUE_OFFSET (each value = one token).
 
-Note: The oracle forward pass produces hard one-hot logits by reading DV
-(dimension 0) at the final layer. For patching we compare the final DV
-values (continuous before rounding) so that fractional shifts are visible.
+Changed positions in oracle format:
+  - Position 0: PC (always changes)
+  - Position b_addr+1: mem[b_addr] (the subtracted cell)
+
+Metric (same as phase3):
+  effect(patch_layer, patch_pos) =
+      mean over changed positions p of:
+          clip01( (dv_patched[p] - dv_B[p]) / (dv_A[p] - dv_B[p]) )
+
+where dv_X[p] is the DV (dimension-0) activation at position p in model X's
+final hidden state. For the oracle, dv_A[p] ≈ output_value_A[p] and
+dv_B[p] ≈ output_value_B[p], so this measures how much the patching
+shifts B's DV toward A's DV at the causally relevant positions.
 """
 
 import os
@@ -32,14 +41,7 @@ from model import HandCodedSUBLEQ, DV
 
 
 def generate_r1_contrast_pairs(pair_type='mem_a', n=500, seed=42):
-    """
-    Generate contrast pairs for the oracle (round1) format.
-
-    pair_type:
-      'mem_a'  - same PC/mem[b], different mem[a]
-      'mem_b'  - same PC/mem[a], different mem[b]
-      'branch' - same PC/mem[a], mem[b] chosen to flip branch direction
-    """
+    """Generate contrast pairs for the oracle (round1) format."""
     random.seed(seed)
     pairs = []
     attempts = 0
@@ -100,7 +102,10 @@ def generate_r1_contrast_pairs(pair_type='mem_a', n=500, seed=42):
         if halted_B:
             continue
 
-        if new_mem_A == new_mem_B and new_pc_A == new_pc_B:
+        # Outputs must differ
+        out_A_vals = [new_pc_A] + list(new_mem_A)
+        out_B_vals = [new_pc_B] + list(new_mem_B)
+        if out_A_vals == out_B_vals:
             continue
 
         pairs.append({
@@ -126,16 +131,6 @@ def encode_r1(mem, pc):
     return torch.tensor(tokens, dtype=torch.long)
 
 
-def _oracle_forward_get_dv(model, tokens, device):
-    """Run oracle forward, return final hidden state DV dimension (B, T)."""
-    tokens = tokens.to(device)
-    pos_ids = torch.arange(tokens.shape[1], device=device)
-    h = model.tok_emb(tokens) + model.pos_emb(pos_ids)
-    for layer in model.layers:
-        h = layer(h)
-    return h, h[:, :, DV].float()  # (B, T, d_model), (B, T)
-
-
 def _oracle_forward_with_cache(model, tokens, device):
     """Run oracle forward, cache residuals at each layer."""
     tokens = tokens.to(device)
@@ -149,30 +144,69 @@ def _oracle_forward_with_cache(model, tokens, device):
     return cache, h[:, :, DV].float()
 
 
-def activation_patch_r1(model, inp_A, inp_B, device='cpu'):
+def _oracle_forward_get_dv(model, tokens, device):
+    """Run oracle forward, return final DV values."""
+    tokens = tokens.to(device)
+    pos_ids = torch.arange(tokens.shape[1], device=device)
+    h = model.tok_emb(tokens) + model.pos_emb(pos_ids)
+    for layer in model.layers:
+        h = layer(h)
+    return h[:, :, DV].float()
+
+
+def activation_patch_r1(model, pair, device='cpu'):
     """
-    Run activation patching on the oracle (round1) model.
+    Focused activation patching on the oracle model.
 
-    Measures how much patching each (layer, position) shifts
-    the final DV output from B toward A.
+    Changed positions (oracle encoding: pos 0 = PC, pos i+1 = mem[i]):
+      - Position 0: PC
+      - Position b_addr+1: mem[b_addr]
 
-    Returns:
-        effects: (n_layers+1, seq_len) tensor
+    Effect at (patch_layer, patch_pos) = mean over changed positions p of:
+        clip01( (dv_patched[p] - dv_B[p]) / (dv_A[p] - dv_B[p]) )
     """
     model.eval()
-    inp_A = inp_A.unsqueeze(0).to(device)
-    inp_B = inp_B.unsqueeze(0).to(device)
 
-    seq_len = inp_A.shape[1]    # 417
-    n_layers = len(model.layers)  # 4
+    b_addr = pair['b_addr']
 
+    inp_A = encode_r1(pair['mem_A'], pair['pc']).unsqueeze(0).to(device)
+    inp_B = encode_r1(pair['mem_B'], pair['pc']).unsqueeze(0).to(device)
+
+    seq_len = inp_A.shape[1]
+    n_layers = len(model.layers)
+
+    # Changed positions in oracle (pos 0=PC, pos i+1=mem[i])
+    chg_candidates = [0, b_addr + 1]
+
+    # Compute DV values for A and B
     with torch.no_grad():
         cache_A, dv_A = _oracle_forward_with_cache(model, inp_A, device)
-        _, dv_B_unpatched = _oracle_forward_get_dv(model, inp_B, device)
+        dv_B = _oracle_forward_get_dv(model, inp_B, device)
 
-        dist_total = (dv_A - dv_B_unpatched).abs().sum().item()
-        if dist_total < 1e-6:
-            return torch.zeros(n_layers + 1, seq_len)
+    # Target DV values (A's correct outputs)
+    # pos 0: new_pc_A; pos b_addr+1: new_mem_A[b_addr]
+    target_dv_A = {
+        0: pair['new_pc_A'],
+        b_addr + 1: pair['new_mem_A'][b_addr],
+    }
+    target_dv_B = {
+        0: pair['new_pc_B'],
+        b_addr + 1: pair['new_mem_B'][b_addr],
+    }
+
+    # Filter positions where outputs genuinely differ
+    valid_pos = []
+    denom_info = {}
+    for p in chg_candidates:
+        dA = float(target_dv_A.get(p, dv_A[0, p].item()))
+        dB = float(target_dv_B.get(p, dv_B[0, p].item()))
+        d = dA - dB
+        if abs(d) > 0.5:  # oracle uses integer values, expect diff >= 1
+            denom_info[p] = (dv_B[0, p].item(), d)
+            valid_pos.append(p)
+
+    if not valid_pos:
+        return torch.zeros(n_layers + 1, seq_len)
 
     effects = torch.zeros(n_layers + 1, seq_len)
 
@@ -191,10 +225,14 @@ def activation_patch_r1(model, inp_A, inp_B, device='cpu'):
                         h[:, patch_pos, :] = cache_A[i + 1][:, patch_pos, :]
 
                 dv_patched = h[:, :, DV].float()
-                dist_after = (dv_A - dv_patched).abs().sum().item()
-                effects[patch_layer, patch_pos] = (
-                    (dist_total - dist_after) / (dist_total + 1e-8)
-                )
+
+                pos_effects = []
+                for p in valid_pos:
+                    dv_B_p, d = denom_info[p]
+                    eff = (dv_patched[0, p].item() - dv_B_p) / d
+                    pos_effects.append(max(0.0, min(1.0, eff)))
+
+                effects[patch_layer, patch_pos] = float(np.mean(pos_effects))
 
     return effects
 
@@ -205,13 +243,8 @@ def run_oracle_patching(model, pairs, device='cpu', n_pairs=100):
     all_effects = []
 
     for i in range(n):
-        pair = pairs[i]
-        inp_A = encode_r1(pair['mem_A'], pair['pc'])
-        inp_B = encode_r1(pair['mem_B'], pair['pc'])
-
-        effects = activation_patch_r1(model, inp_A, inp_B, device=device)
+        effects = activation_patch_r1(model, pairs[i], device=device)
         all_effects.append(effects)
-
         if (i + 1) % 20 == 0:
             print(f"    Patched {i+1}/{n} pairs")
 
@@ -220,7 +253,7 @@ def run_oracle_patching(model, pairs, device='cpu', n_pairs=100):
 
 def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f"Phase 5: Oracle Activation Patching")
+    print(f"Phase 5: Oracle Activation Patching (focused metric)")
     print(f"Device: {device}")
 
     results_dir = os.path.join(script_dir, 'results')
@@ -250,15 +283,13 @@ def main():
         for l in range(mean_effects.shape[0]):
             row_max = mean_effects[l].max().item()
             row_argmax = mean_effects[l].argmax().item()
-            print(f"    L{l}: max={row_max:.3f} at pos {row_argmax}")
+            print(f"    L{l}: max={row_max:.4f} at pos {row_argmax}")
 
-    # Save
     out_pkl = os.path.join(results_dir, 'phase5_oracle_patch.pkl')
     with open(out_pkl, 'wb') as f:
         pickle.dump({'oracle_effects': oracle_effects, 'pair_types': pair_types}, f)
     print(f"\nResults saved to {out_pkl}")
 
-    # JSON summary
     json_summary = {}
     for ptype, effects in oracle_effects.items():
         effects_t = torch.tensor(effects)

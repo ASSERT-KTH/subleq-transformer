@@ -2,12 +2,11 @@
 #SBATCH --job-name=subleq-analysis
 #SBATCH --output=logs/analysis_%j.out
 #SBATCH --error=logs/analysis_%j.err
-#SBATCH --gpus-per-node=T4:1
-#SBATCH --time=06:00:00
+#SBATCH --gpus-per-node=V100:1
+#SBATCH --time=04:00:00
 #SBATCH --account=naiss2025-5-243
 
-# Run all analysis phases after training is complete.
-# Phases 1, 2, 3, 4 in sequence.
+# Re-run patching (focused metric), held-out probes, fix Fig 9 + Fig 6, update report.
 
 set -e
 REPO=/mimer/NOBACKUP/groups/naiss2025-5-243/andre/subleq-transformer
@@ -15,42 +14,50 @@ EXP=$REPO/experiments
 
 module purge
 module load PyTorch/2.1.2-foss-2023a-CUDA-12.1.1
+module load matplotlib/3.7.2-gfbf-2023a
 
-echo "Starting analysis on $(hostname)"
-echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'N/A')"
-date
+echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader)"
+echo "Start: $(date)"
 
 cd $EXP
+mkdir -p logs figures results
 
-# Phase 1: Oracle probing
-echo "=== Phase 1: Oracle ==="
-python phase1_oracle.py
-echo "Phase 1 done"; date
-
-# Phase 2: Probe trained models
-echo "=== Phase 2: Probing trained models ==="
-python phase2_probe_trained.py \
-    --n-examples 5000 \
-    --n-steps 1000 \
+# Phase 3: Activation patching (focused metric, all 5 seeds)
+echo "=== Phase 3: Activation Patching (focused metric) ==="
+python3 phase3_patching.py \
     --ckpt-dir $EXP/checkpoints \
-    --output-dir $EXP/results
-echo "Phase 2 done"; date
-
-# Phase 3: Activation patching
-echo "=== Phase 3: Activation patching ==="
-python phase3_patching.py \
+    --output-dir $EXP/results \
     --n-pairs 500 \
-    --n-patch-per-type 100 \
-    --ckpt-dir $EXP/checkpoints \
-    --output-dir $EXP/results
-echo "Phase 3 done"; date
+    --n-patch-per-type 200 2>&1
+echo "Phase 3 done: $(date)"
 
-# Phase 4: Failure analysis
-echo "=== Phase 4: Failure cases ==="
-python phase4_failures.py \
-    --ckpt-dir $EXP/checkpoints \
-    --output-dir $EXP/results
-echo "Phase 4 done"; date
+# Phase 5: Oracle patching (focused metric)
+echo "=== Phase 5: Oracle Patching (focused metric) ==="
+python3 phase5_oracle_patch.py 2>&1
+echo "Phase 5 done: $(date)"
 
-echo "All analysis phases complete!"
-date
+# Phase 2 (held-out): Distribution generalization of probes
+echo "=== Phase 2 (held-out): Held-Out Probes ==="
+python3 phase2_heldout.py \
+    --n-train 5000 \
+    --n-heldout 1000 \
+    --n-steps 500 2>&1
+echo "Phase 2 (held-out) done: $(date)"
+
+# Regenerate all figures (includes Fig 9 fix + Fig 6 threshold fix)
+echo "=== Generating Figures ==="
+python3 generate_figures.py \
+    --results-dir $EXP/results \
+    --output-dir $EXP/figures 2>&1
+echo "Figures done: $(date)"
+
+# Update report
+echo "=== Updating Report ==="
+python3 generate_report.py \
+    --results-dir $EXP/results \
+    --figures-dir $EXP/figures \
+    --output $REPO/research_report.md 2>&1
+echo "Report done: $(date)"
+
+echo "All done: $(date)"
+ls -lh $EXP/figures/

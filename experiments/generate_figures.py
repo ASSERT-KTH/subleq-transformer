@@ -347,7 +347,7 @@ def fig6_diagnostic(phase2_json_path, phase3_json_path, output_path):
 
     # Classification thresholds
     probe_threshold = 0.9
-    patch_threshold = 0.3
+    patch_threshold = 0.1
 
     fig, ax = plt.subplots(figsize=(7, 5))
     ax.set_xlim(-0.1, 1.1)
@@ -520,7 +520,7 @@ def fig9_failure_trace(phase6_trace_path, output_path):
     # Plot: for each step, show model correct/incorrect, and decoded PC vs GT PC
     steps = [s['step'] for s in trace]
     correct = [s.get('correct', False) for s in trace]
-    gt_pcs = [s.get('gt', {}).get('pc', 0) for s in trace]
+    gt_pcs = [s.get('true_pc', s.get('gt', {}).get('pc', 0)) for s in trace]
     pred_pcs = [s.get('pred_pc', 0) for s in trace]
 
     fig, axes = plt.subplots(2, 1, figsize=(8, 5))
