@@ -1,0 +1,6 @@
+checkpoints/
+results/*.pkl
+logs/
+__pycache__/
+*.pyc
+figures/

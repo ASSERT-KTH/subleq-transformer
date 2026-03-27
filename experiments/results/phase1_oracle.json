@@ -1,0 +1,173 @@
+{
+  "oracle_map": {
+    "0": {
+      "name": "DV",
+      "layer": 0,
+      "desc": "Token value; receives PC delta and write delta from L4"
+    },
+    "2": {
+      "name": "DI",
+      "layer": 0,
+      "desc": "Position index i"
+    },
+    "3": {
+      "name": "DI2",
+      "layer": 0,
+      "desc": "Position index squared i^2"
+    },
+    "4": {
+      "name": "D1",
+      "layer": 0,
+      "desc": "Constant 1"
+    },
+    "5": {
+      "name": "DPC",
+      "layer": 0,
+      "desc": "PC indicator: 1 at position 0 only"
+    },
+    "6": {
+      "name": "DA",
+      "layer": 1,
+      "desc": "Operand a = mem[pc] (after L1 attn)"
+    },
+    "8": {
+      "name": "DB",
+      "layer": 1,
+      "desc": "Operand b = mem[pc+1] (after L1 attn)"
+    },
+    "10": {
+      "name": "DC",
+      "layer": 1,
+      "desc": "Operand c = mem[pc+2] (after L1 attn)"
+    },
+    "18": {
+      "name": "DPCC",
+      "layer": 1,
+      "desc": "Broadcast copy of PC value (after L1 attn)"
+    },
+    "21": {
+      "name": "DSB",
+      "layer": 1,
+      "desc": "Safe b: b at pos 0, 0 elsewhere (after L1 FFN)"
+    },
+    "12": {
+      "name": "DMA",
+      "layer": 2,
+      "desc": "mem[a] (after L2 attn)"
+    },
+    "13": {
+      "name": "DMB",
+      "layer": 2,
+      "desc": "mem[b] (after L2 attn)"
+    },
+    "14": {
+      "name": "DNV",
+      "layer": 2,
+      "desc": "New value = mem[b] - mem[a] (after L2 FFN)"
+    },
+    "15": {
+      "name": "DDW",
+      "layer": 2,
+      "desc": "Write delta = -mem[a] (after L2 FFN)"
+    },
+    "20": {
+      "name": "DSTEP",
+      "layer": 2,
+      "desc": "Step indicator 1[nv>0] (after L2 FFN)"
+    },
+    "22": {
+      "name": "DSDDW",
+      "layer": 2,
+      "desc": "Safe write delta (after L2 FFN)"
+    },
+    "29": {
+      "name": "DSS",
+      "layer": 2,
+      "desc": "Safe step (after L2 FFN)"
+    },
+    "24": {
+      "name": "DBCB",
+      "layer": 3,
+      "desc": "Broadcast of b to all positions (after L3 attn)"
+    },
+    "25": {
+      "name": "DBCDDW",
+      "layer": 3,
+      "desc": "Broadcast of write delta (after L3 attn)"
+    },
+    "26": {
+      "name": "DH0",
+      "layer": 3,
+      "desc": "ReLU(j - b) (after L3 FFN)"
+    },
+    "27": {
+      "name": "DH1",
+      "layer": 3,
+      "desc": "ReLU(j - b - 1) (after L3 FFN)"
+    },
+    "28": {
+      "name": "DH2",
+      "layer": 3,
+      "desc": "ReLU(j - b - 2) (after L3 FFN)"
+    }
+  },
+  "layer_purposes": {
+    "0": "Embedding: encodes token values, positions, PC indicator",
+    "1": "L1: reads a, b, c from PC position; broadcasts PC value",
+    "2": "L2: reads mem[a], mem[b]; computes new value and write delta",
+    "3": "L3: broadcasts b address and write delta to all positions",
+    "4": "L4: writes new value to mem[b] position, updates PC"
+  },
+  "probe_summary": {
+    "0": {
+      "pc": 1.0,
+      "mem_a": -0.0002,
+      "mem_b": -0.0001,
+      "delta": -0.0,
+      "branch_taken": 0.8533,
+      "a_addr": -0.0017,
+      "b_addr": -0.0005
+    },
+    "1": {
+      "pc": 1.0,
+      "mem_a": 0.0362,
+      "mem_b": 0.0413,
+      "delta": 0.0424,
+      "branch_taken": 0.8567,
+      "a_addr": 0.9479,
+      "b_addr": 0.9954
+    },
+    "2": {
+      "pc": 0.9996,
+      "mem_a": 1.0,
+      "mem_b": 0.9999,
+      "delta": 0.999,
+      "branch_taken": 0.9983,
+      "a_addr": 0.9514,
+      "b_addr": 0.9995
+    },
+    "3": {
+      "pc": -6745.1064,
+      "mem_a": 1.0,
+      "mem_b": 0.9681,
+      "delta": 0.9983,
+      "branch_taken": 1.0,
+      "a_addr": 0.9637,
+      "b_addr": 0.9999
+    },
+    "4": {
+      "pc": -611576.0,
+      "mem_a": 0.9998,
+      "mem_b": 0.9907,
+      "delta": 0.9817,
+      "branch_taken": 0.9983,
+      "a_addr": 0.9595,
+      "b_addr": 0.999
+    }
+  },
+  "verification": {
+    "DPC_pos0": 1.0,
+    "DPC_others": 0.0,
+    "DI_correlation": 1.0
+  }
+}
