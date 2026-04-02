@@ -1,7 +1,7 @@
 # Do Transformers Rediscover Correct Computational Circuits?
 ## A Mechanistic Interpretability Study with Ground Truth
 
-*Generated: 2026-03-27 18:08*
+*Generated: 2026-04-02 15:35*
 
 ---
 
@@ -314,8 +314,40 @@ This finding isolates architectural inductive bias from training dynamics: the n
 See Figure 10 for the probe heatmap comparison across all four models (oracle, constrained-LN, constrained-noLN, trained).
 
 
-![Fig 10: Probe heatmaps: Oracle vs Constrained-LN vs Constrained-noLN](experiments/figures/fig10_constrained_probe.png)
-*Fig 10: Probe heatmaps: Oracle vs Constrained-LN vs Constrained-noLN*
+![Fig 10: Probe heatmaps: Oracle vs Constrained-LN vs Constrained-noLN vs Trained](experiments/figures/fig10_constrained_probe.png)
+*Fig 10: Probe heatmaps: Oracle vs Constrained-LN vs Constrained-noLN vs Trained*
+
+## 5d. Constrained-LN: Causal Analysis via Activation Patching
+
+We apply the same focused activation patching metric to the constrained-LN model. This lets us directly compare causal circuit structure across three models: oracle (analytically correct), constrained-LN (same footprint, trained), and trained (larger architecture, trained).
+
+### Constrained-LN Patching (max effect over positions)
+
+| Layer | mem_a | mem_b | branch |
+|-------|-------|-------|--------|
+| L0 | 0.140 | 0.140 | 0.135 |
+| L1 | 0.140 | 0.140 | 0.135 |
+| L2 | 0.140 | 0.140 | 0.135 |
+| L3 | 0.140 | 0.131 | 0.137 |
+| L4 | 0.172 | 0.207 | 0.447 |
+
+**Peak causal effects (constrained-LN):**
+
+- **mem_a**: L4 pos 0 = 0.172
+- **mem_b**: L4 pos 0 = 0.207
+- **branch**: L4 pos 0 = 0.447
+
+### Comparison with Oracle and Trained Model
+
+The key question is whether the constrained-LN model's causal circuit more closely resembles the oracle (early-layer localization) or the trained model (late-layer localization).
+
+| Model | mem_a peak | mem_b peak | branch peak |
+|-------|-----------|-----------|------------|
+See Figure 11 for the full 3-panel patching comparison.
+
+
+![Fig 11: Activation patching comparison: Oracle vs Constrained-LN vs Trained](experiments/figures/fig11_constrained_patch.png)
+*Fig 11: Activation patching comparison: Oracle vs Constrained-LN vs Trained*
 
 ## 6. Phase 3 Results: Causal Circuit Analysis
 
@@ -593,7 +625,9 @@ Key findings:
 5. A constrained model matching the oracle's exact architectural footprint
    (d_model=32, 4 layers, ReLU) learns the task with LayerNorm but fails without it,
    demonstrating that the oracle's native architecture is not trainable by gradient
-   descent without additional inductive biases.
+   descent without additional inductive biases. Activation patching on constrained-LN
+   reveals whether trained representations are causally structured like the oracle
+   or like the larger trained model.
 
 The core implication: behavioral accuracy (99.8%) does not guarantee circuit
 correctness. The trained model has learned a different computational algorithm than

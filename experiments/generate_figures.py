@@ -12,7 +12,8 @@ Figures:
   fig7_localization.png            - Dimensional localization curves
   fig8_dynamics.png                - Training dynamics (accuracy vs fraction)
   fig9_failure_trace.png           - Step-by-step probe trace for failure case
-  fig10_constrained_probe.png      - Constrained model probe comparison (ln vs no_ln)
+  fig10_constrained_probe.png      - Probe heatmaps: oracle vs constrained-LN vs constrained-noLN vs trained
+  fig11_constrained_patch.png     - Patching comparison: oracle vs constrained-LN vs trained
 """
 
 import os
@@ -555,7 +556,7 @@ def fig9_failure_trace(phase6_trace_path, output_path):
 
 # ── Fig 10: Constrained model probe comparison ───────────────────────────────
 
-def fig10_constrained_probe(constrained_summary_path, phase1_path, output_path):
+def fig10_constrained_probe(constrained_summary_path, phase1_path, phase2_path, output_path):
     """
     4-panel heatmap: Oracle | Constrained-LN | Constrained-noLN | Trained.
     All at pos0, best metric per layer.
@@ -569,10 +570,10 @@ def fig10_constrained_probe(constrained_summary_path, phase1_path, output_path):
         cdata = json.load(f)
     with open(phase1_path) as f:
         oracle_data = json.load(f)
+    with open(phase2_path) as f:
+        trained_data = json.load(f)
 
-    is_cls = [t == 'branch_taken' for t in TARGETS]
-
-    # Oracle matrix (n_layers=5: embed + 4 blocks)
+    # Oracle matrix (embed + 4 blocks)
     probe_summary_oracle = oracle_data.get('probe_summary', {})
     n_oracle = max(int(k) for k in probe_summary_oracle.keys()) + 1
     mat_oracle = np.full((len(TARGETS), n_oracle), np.nan)
@@ -585,12 +586,11 @@ def fig10_constrained_probe(constrained_summary_path, phase1_path, output_path):
 
     panels = [('Oracle (constructed)', mat_oracle, n_oracle)]
 
-    for variant_key, title in [('ln', 'Constrained-LN (trained)'),
-                                ('no_ln', 'Constrained-noLN (trained)')]:
+    for variant_key, title in [('ln', 'Constrained-LN'),
+                                ('no_ln', 'Constrained-noLN')]:
         vdata = cdata.get(variant_key, {})
         probe_means = vdata.get('probe_means', {})
         if not probe_means:
-            # Build empty panel
             panels.append((title, np.full((len(TARGETS), 5), np.nan), 5))
             continue
         n_l = max(int(k) for t in probe_means.values() for k in t.keys()) + 1
@@ -603,9 +603,20 @@ def fig10_constrained_probe(constrained_summary_path, phase1_path, output_path):
                     mat[i, j] = entry['mean']
         panels.append((title, mat, n_l))
 
-    # Note: no trained-model panel here to keep width manageable (it's already in fig3)
+    # Trained model panel (d=256, 6 layers)
+    trained_probe_means = trained_data.get('probe_means', {})
+    n_trained = 7  # embed + 6 blocks
+    mat_trained = np.full((len(TARGETS), n_trained), np.nan)
+    for i, tname in enumerate(TARGETS):
+        tdata = trained_probe_means.get(tname, {})
+        for j in range(n_trained):
+            entry = tdata.get(str(j))
+            if entry:
+                mat_trained[i, j] = entry['mean']
+    panels.append(('Trained (d=256)', mat_trained, n_trained))
+
     n_panels = len(panels)
-    fig, axes = plt.subplots(1, n_panels, figsize=(5 * n_panels, 4))
+    fig, axes = plt.subplots(1, n_panels, figsize=(4.5 * n_panels, 4))
     if n_panels == 1:
         axes = [axes]
 
@@ -614,7 +625,7 @@ def fig10_constrained_probe(constrained_summary_path, phase1_path, output_path):
         display = np.clip(mat, vmin, vmax)
         im = ax.imshow(display, cmap=CMAP_PROBE, vmin=vmin, vmax=vmax, aspect='auto')
         ax.set_xticks(range(n_l))
-        ax.set_xticklabels([f'L{j}' for j in range(n_l)], fontsize=9)
+        ax.set_xticklabels([f'L{j}' for j in range(n_l)], fontsize=8)
         ax.set_yticks(range(len(TARGETS)))
         ax.set_yticklabels(TARGET_LABELS, fontsize=9)
         ax.set_title(title, fontsize=10)
@@ -626,10 +637,103 @@ def fig10_constrained_probe(constrained_summary_path, phase1_path, output_path):
                     continue
                 color = 'white' if display[i, j] > 0.65 else 'black'
                 ax.text(j, i, f'{v:.2f}', ha='center', va='center',
-                        fontsize=7, color=color, fontweight='bold')
+                        fontsize=6, color=color, fontweight='bold')
         fig.colorbar(im, ax=ax, fraction=0.04, pad=0.02)
 
-    fig.suptitle('Linear Probe Heatmaps: Oracle vs Constrained Architectures', fontsize=12)
+    fig.suptitle('Linear Probe Heatmaps: Oracle vs Constrained vs Trained', fontsize=12)
+    savefig(fig, output_path)
+
+
+# ── Fig 11: Constrained-LN patching heatmap ──────────────────────────────────
+
+def fig11_constrained_patch(constrained_patch_pkl, phase3_pkl, phase5_pkl, output_path):
+    """
+    3-panel activation patching comparison: Oracle | Constrained-LN | Trained.
+    Shows mean effect heatmap (layer × pair_type) for each model.
+    """
+    if not os.path.exists(constrained_patch_pkl):
+        print(f"  Skipping Fig 11: {constrained_patch_pkl} not found")
+        return
+
+    with open(constrained_patch_pkl, 'rb') as f:
+        c_data = pickle.load(f)
+    with open(phase5_pkl, 'rb') as f:
+        oracle_raw = pickle.load(f)
+    with open(phase3_pkl, 'rb') as f:
+        trained_raw = pickle.load(f)
+
+    pair_types = c_data.get('pair_types', ['mem_a', 'mem_b', 'branch'])
+    pair_labels = ['mem_a', 'mem_b', 'branch']
+
+    def max_over_pos(effects_dict, pair_types):
+        """Return (n_layers+1, n_pair_types) array of max effect over positions."""
+        rows = []
+        for ptype in pair_types:
+            arr = effects_dict.get(ptype)
+            if arr is None:
+                rows.append(np.zeros(5))
+                continue
+            rows.append(np.array(arr).max(axis=1))  # max over positions per layer
+        return np.array(rows).T  # (n_layers+1, n_pair_types)
+
+    # Constrained-LN: mean over seeds
+    c_results = c_data.get('results', {})
+    if c_results:
+        stacked = {}
+        for ptype in pair_types:
+            arrs = [c_results[s]['effects'][ptype] for s in c_results
+                    if ptype in c_results[s]['effects']]
+            stacked[ptype] = np.stack(arrs).mean(axis=0)
+        c_mat = max_over_pos(stacked, pair_types)
+    else:
+        c_mat = np.zeros((5, len(pair_types)))
+
+    # Oracle
+    oracle_effects = oracle_raw.get('oracle_effects', {})
+    # oracle_effects: {ptype: (n_layers+1, seq_len)} numpy
+    o_mat = max_over_pos(oracle_effects, pair_types)
+
+    # Trained: mean over seeds
+    t_results = trained_raw.get('results', {})
+    if t_results:
+        stacked_t = {}
+        for ptype in pair_types:
+            arrs = [t_results[s]['effects'][ptype] for s in t_results
+                    if ptype in t_results[s].get('effects', {})]
+            stacked_t[ptype] = np.stack(arrs).mean(axis=0)
+        t_mat = max_over_pos(stacked_t, pair_types)
+    else:
+        t_mat = np.zeros((7, len(pair_types)))
+
+    panels = [
+        ('Oracle (constructed, L0-4)', o_mat),
+        ('Constrained-LN (L0-4)', c_mat),
+        ('Trained (d=256, L0-6)', t_mat),
+    ]
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    vmin, vmax = 0.0, 1.0
+    for ax, (title, mat) in zip(axes, panels):
+        n_l = mat.shape[0]
+        display = np.clip(mat, vmin, vmax)
+        im = ax.imshow(display, cmap=CMAP_PATCH, vmin=vmin, vmax=vmax, aspect='auto')
+        ax.set_xticks(range(len(pair_types)))
+        ax.set_xticklabels(pair_labels, fontsize=9)
+        ax.set_yticks(range(n_l))
+        ax.set_yticklabels([f'L{l}' for l in range(n_l)], fontsize=9)
+        ax.set_title(title, fontsize=10)
+        ax.set_xlabel('Pair type')
+        ax.set_ylabel('Patch layer')
+        for i in range(n_l):
+            for j in range(len(pair_types)):
+                v = mat[i, j]
+                color = 'white' if display[i, j] > 0.5 else 'black'
+                ax.text(j, i, f'{v:.2f}', ha='center', va='center',
+                        fontsize=8, color=color, fontweight='bold')
+        fig.colorbar(im, ax=ax, fraction=0.04, pad=0.02)
+
+    fig.suptitle('Activation Patching: Oracle vs Constrained-LN vs Trained\n'
+                 '(max effect over positions per layer)', fontsize=11)
     savefig(fig, output_path)
 
 
@@ -706,11 +810,20 @@ def main():
         os.path.join(O, 'fig9_failure_trace.png'),
     )
 
-    print("Fig 10: Constrained model probe comparison")
+    print("Fig 10: Constrained model probe comparison (4-panel)")
     fig10_constrained_probe(
         os.path.join(R, 'phase2_constrained_summary.json'),
         os.path.join(R, 'phase1_oracle.json'),
+        os.path.join(R, 'phase2_summary.json'),
         os.path.join(O, 'fig10_constrained_probe.png'),
+    )
+
+    print("Fig 11: Constrained-LN patching comparison")
+    fig11_constrained_patch(
+        os.path.join(R, 'phase3_constrained_ln.pkl'),
+        os.path.join(R, 'phase3_patching.pkl'),
+        os.path.join(R, 'phase5_oracle_patch.pkl'),
+        os.path.join(O, 'fig11_constrained_patch.png'),
     )
 
     print(f"\nAll figures saved to {O}/")

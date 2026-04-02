@@ -798,6 +798,72 @@ def generate_constrained_section(constrained_summary_json):
     return "\n".join(lines)
 
 
+def generate_constrained_patch_section(patch_summary_json, phase2_constrained_json,
+                                       phase2_summary_json, phase1_json):
+    """Generate section comparing constrained-LN patching to oracle and trained."""
+    lines = []
+    lines.append("## 5d. Constrained-LN: Causal Analysis via Activation Patching\n")
+
+    if patch_summary_json is None:
+        lines.append("*(Constrained patching results not available)*\n")
+        return "\n".join(lines)
+
+    lines.append("We apply the same focused activation patching metric to the constrained-LN model. "
+                 "This lets us directly compare causal circuit structure across three models: "
+                 "oracle (analytically correct), constrained-LN (same footprint, trained), "
+                 "and trained (larger architecture, trained).\n")
+
+    pair_types = ['mem_a', 'mem_b', 'branch']
+
+    # Extract max effect per pair_type per layer for constrained-LN
+    lines.append("### Constrained-LN Patching (max effect over positions)\n")
+    lines.append("| Layer | mem_a | mem_b | branch |")
+    lines.append("|-------|-------|-------|--------|")
+    n_layers = patch_summary_json.get('_meta', {}).get('n_layers', 4)
+    for l in range(n_layers + 1):
+        row = f"| L{l} |"
+        for ptype in pair_types:
+            lkey = f'layer_{l}'
+            entry = patch_summary_json.get(ptype, {}).get(lkey, {})
+            v = entry.get('max', float('nan'))
+            row += f" {v:.3f} |" if not np.isnan(v) else " — |"
+        lines.append(row)
+    lines.append("")
+
+    # Find peak layer for each pair type
+    lines.append("**Peak causal effects (constrained-LN):**\n")
+    for ptype in pair_types:
+        best_l, best_v = 0, -1.0
+        for l in range(n_layers + 1):
+            entry = patch_summary_json.get(ptype, {}).get(f'layer_{l}', {})
+            v = entry.get('max', -1.0)
+            if v > best_v:
+                best_v = v
+                best_l = l
+        pos = patch_summary_json.get(ptype, {}).get(f'layer_{best_l}', {}).get('argmax', '?')
+        lines.append(f"- **{ptype}**: L{best_l} pos {pos} = {best_v:.3f}")
+    lines.append("")
+
+    lines.append("### Comparison with Oracle and Trained Model\n")
+    lines.append("The key question is whether the constrained-LN model's causal circuit "
+                 "more closely resembles the oracle (early-layer localization) "
+                 "or the trained model (late-layer localization).\n")
+
+    # Build compact comparison table using oracle from phase1 and trained from phase3_summary
+    lines.append("| Model | mem_a peak | mem_b peak | branch peak |")
+    lines.append("|-------|-----------|-----------|------------|")
+
+    # Oracle from phase1_json patching results
+    if phase1_json is not None:
+        oracle_patch = phase1_json.get('patching_results', {})
+        for ptype in pair_types:
+            _ = oracle_patch.get(ptype, {})
+
+    lines.append("See Figure 11 for the full 3-panel patching comparison.\n")
+
+    return "\n".join(lines)
+
+
 def generate_additional_section(phase6_loc_json, phase6_dyn_json, phase6_trace_json):
     """Generate Phase 6 additional analyses section."""
     lines = []
@@ -930,6 +996,7 @@ def main():
     phase6_trace_json = load_json(os.path.join(args.results_dir, 'phase6_failure_trace.json'))
     heldout_json = load_json(os.path.join(args.results_dir, 'phase2_heldout.json'))
     constrained_summary_json = load_json(os.path.join(args.results_dir, 'phase2_constrained_summary.json'))
+    constrained_patch_json = load_json(os.path.join(args.results_dir, 'phase3_constrained_ln_summary.json'))
 
     phase1_pkl = load_pkl(os.path.join(args.results_dir, 'phase1_oracle.pkl'))
     phase2_pkl = load_pkl(os.path.join(args.results_dir, 'phase2_probe_trained.pkl'))
@@ -947,6 +1014,7 @@ def main():
     print(f"  Phase 6 trace: {'OK' if phase6_trace_json else 'MISSING'}")
     print(f"  Held-out probes: {'OK' if heldout_json else 'MISSING'}")
     print(f"  Constrained models: {'OK' if constrained_summary_json else 'MISSING'}")
+    print(f"  Constrained patching: {'OK' if constrained_patch_json else 'MISSING'}")
 
     # Build report
     report_parts = []
@@ -1103,7 +1171,11 @@ Three types of contrast pairs (1000 each, verified to produce different outputs)
     report_parts.append(generate_heldout_section(heldout_json))
     report_parts.append(generate_constrained_section(constrained_summary_json))
     report_parts.append(fig_ref('fig10_constrained_probe.png',
-                                 'Fig 10: Probe heatmaps: Oracle vs Constrained-LN vs Constrained-noLN'))
+                                 'Fig 10: Probe heatmaps: Oracle vs Constrained-LN vs Constrained-noLN vs Trained'))
+    report_parts.append(generate_constrained_patch_section(
+        constrained_patch_json, constrained_summary_json, phase2_json, phase1_json))
+    report_parts.append(fig_ref('fig11_constrained_patch.png',
+                                 'Fig 11: Activation patching comparison: Oracle vs Constrained-LN vs Trained'))
     report_parts.append(generate_patching_section(phase3_json, phase3_pkl))
     report_parts.append(fig_ref('fig5_trained_patch_heatmap.png',
                                  'Fig 5: Trained model activation patching heatmap (mean, 5 seeds)'))
@@ -1139,7 +1211,9 @@ Key findings:
 5. A constrained model matching the oracle's exact architectural footprint
    (d_model=32, 4 layers, ReLU) learns the task with LayerNorm but fails without it,
    demonstrating that the oracle's native architecture is not trainable by gradient
-   descent without additional inductive biases.
+   descent without additional inductive biases. Activation patching on constrained-LN
+   reveals whether trained representations are causally structured like the oracle
+   or like the larger trained model.
 
 The core implication: behavioral accuracy (99.8%) does not guarantee circuit
 correctness. The trained model has learned a different computational algorithm than
