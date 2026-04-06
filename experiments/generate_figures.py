@@ -14,6 +14,10 @@ Figures:
   fig9_failure_trace.png           - Step-by-step probe trace for failure case
   fig10_constrained_probe.png      - Probe heatmaps: oracle vs constrained-LN vs constrained-noLN vs trained
   fig11_constrained_patch.png     - Patching comparison: oracle vs constrained-LN vs trained
+  fig12_effective_rank.png        - Effective rank vs layer depth (all capacity variants)
+  fig13_rsa_heatmap.png           - RSA: constrained-LN vs scaled models
+  fig14_gini_sparsity.png         - Gini sparsity vs layer depth (all capacity variants)
+  fig15_patching_peak_vs_d.png    - Patching peak layer vs capacity (d)
 """
 
 import os
@@ -737,6 +741,192 @@ def fig11_constrained_patch(constrained_patch_pkl, phase3_pkl, phase5_pkl, outpu
     savefig(fig, output_path)
 
 
+# ── Figs 12-14: Capacity scaling distributional metrics ───────────────────────
+
+# Model display order and colours
+SCALE_MODELS = [
+    ('oracle',          'Oracle (d=32,4L)',            'black',   '--'),
+    ('constrained_ln',  'Constrained-LN (d=32,4L)',    'purple',  '-'),
+    ('scaled_d32',      'Scaled d=32 (6L)',             'royalblue','-'),
+    ('scaled_d64',      'Scaled d=64 (6L)',             'steelblue','-'),
+    ('scaled_d128',     'Scaled d=128 (6L)',            'darkorange','-'),
+    ('trained_d256',    'Trained d=256 (6L)',           'crimson', '-'),
+]
+
+
+def _get_model_data(metrics_json, family, metric_key):
+    """Return (relative_depths, mean_per_layer, std_per_layer) for a model family."""
+    data = metrics_json.get(metric_key, {})
+    seed_keys = [k for k in data if k.startswith(family)]
+    if not seed_keys:
+        return None, None, None
+    all_layers = sorted(set(
+        int(l) for k in seed_keys for l in data[k].keys()
+    ))
+    if not all_layers:
+        return None, None, None
+    n_layers = max(all_layers)
+    rel_depths = [l / max(n_layers, 1) for l in all_layers]
+    per_layer_vals = []
+    for l in all_layers:
+        vs = [data[k].get(l, float('nan')) for k in seed_keys
+              if not np.isnan(data[k].get(l, float('nan')))]
+        per_layer_vals.append(vs if vs else [float('nan')])
+    means = [np.mean(vs) for vs in per_layer_vals]
+    stds  = [np.std(vs)  if len(vs) > 1 else 0.0 for vs in per_layer_vals]
+    return rel_depths, means, stds
+
+
+def fig12_effective_rank(phase7_path, output_path):
+    """Effective rank vs relative layer depth, one curve per model."""
+    if not os.path.exists(phase7_path):
+        print(f"  Skipping Fig 12: {phase7_path} not found")
+        return
+    with open(phase7_path) as f:
+        data = json.load(f)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for family, label, color, ls in SCALE_MODELS:
+        depths, means, stds = _get_model_data(data, family, 'effective_rank')
+        if depths is None:
+            continue
+        ax.plot(depths, means, color=color, linestyle=ls, marker='o', markersize=4, label=label)
+        if stds and any(s > 0 for s in stds):
+            lo = [m - s for m, s in zip(means, stds)]
+            hi = [m + s for m, s in zip(means, stds)]
+            ax.fill_between(depths, lo, hi, color=color, alpha=0.12)
+
+    ax.set_xlabel('Relative layer depth (0=embed, 1=final)')
+    ax.set_ylabel('Effective rank')
+    ax.set_title('Effective Rank vs Layer Depth\n(exp-entropy of singular value spectrum, pos 0)', fontsize=11)
+    ax.legend(fontsize=8, loc='upper left')
+    ax.grid(True, alpha=0.3)
+    savefig(fig, output_path)
+
+
+def fig13_rsa_heatmap(phase7_path, output_path):
+    """
+    RSA between constrained-LN and each scaled model: rho at each matched layer pair.
+    One subplot per target model (scaled_d32, d64, d128, trained_d256).
+    """
+    if not os.path.exists(phase7_path):
+        print(f"  Skipping Fig 13: {phase7_path} not found")
+        return
+    with open(phase7_path) as f:
+        data = json.load(f)
+
+    rsa_data = data.get('rsa', {})
+    # Find pairs: constrained_ln_s0 vs ...
+    target_families = ['scaled_d32', 'scaled_d64', 'scaled_d128', 'trained_d256']
+    panels = []
+    for tf in target_families:
+        pair_key = f'constrained_ln_s0_vs_{tf}_s0'
+        if pair_key in rsa_data:
+            panels.append((tf, rsa_data[pair_key]))
+
+    if not panels:
+        print("  Skipping Fig 13: no RSA pairs found")
+        return
+
+    fig, axes = plt.subplots(1, len(panels), figsize=(4 * len(panels), 4))
+    if len(panels) == 1:
+        axes = [axes]
+
+    for ax, (tf, pair_rsa) in zip(axes, panels):
+        # Sort by ref layer
+        items = sorted(pair_rsa.items())
+        labels = [k for k, _ in items]
+        rhos   = [v['rho'] for _, v in items]
+        pvals  = [v['p']   for _, v in items]
+
+        x = range(len(labels))
+        bars = ax.bar(x, rhos, color=['green' if r > 0 else 'red' for r in rhos], alpha=0.7)
+        # Mark significance
+        for i, (r, p) in enumerate(zip(rhos, pvals)):
+            if p < 0.05:
+                ax.text(i, r + 0.01, '*', ha='center', va='bottom', fontsize=12)
+        ax.set_xticks(list(x))
+        ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=7)
+        ax.set_ylim(-0.5, 1.0)
+        ax.axhline(0, color='black', linewidth=0.8)
+        ax.set_title(f'constrained-LN\nvs {tf}', fontsize=9)
+        ax.set_ylabel('Spearman ρ (RSA)')
+
+    fig.suptitle('RSA: Constrained-LN vs Scaled Models\n(* = p < 0.05)', fontsize=11)
+    plt.tight_layout()
+    savefig(fig, output_path)
+
+
+def fig14_gini_sparsity(phase7_path, output_path):
+    """Gini sparsity vs relative layer depth, one curve per model."""
+    if not os.path.exists(phase7_path):
+        print(f"  Skipping Fig 14: {phase7_path} not found")
+        return
+    with open(phase7_path) as f:
+        data = json.load(f)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for family, label, color, ls in SCALE_MODELS:
+        depths, means, stds = _get_model_data(data, family, 'gini_sparsity')
+        if depths is None:
+            continue
+        ax.plot(depths, means, color=color, linestyle=ls, marker='o', markersize=4, label=label)
+        if stds and any(s > 0 for s in stds):
+            lo = [m - s for m, s in zip(means, stds)]
+            hi = [m + s for m, s in zip(means, stds)]
+            ax.fill_between(depths, lo, hi, color=color, alpha=0.12)
+
+    ax.set_xlabel('Relative layer depth (0=embed, 1=final)')
+    ax.set_ylabel('Gini coefficient')
+    ax.set_title('Gini Sparsity vs Layer Depth\n(higher = more concentrated in fewer dimensions)', fontsize=11)
+    ax.legend(fontsize=8, loc='best')
+    ax.grid(True, alpha=0.3)
+    savefig(fig, output_path)
+
+
+def fig15_patching_peak_vs_d(phase3_scaled_path, output_path):
+    """
+    Summary bar chart: patching peak layer (relative) for each model variant.
+    Answers: does causal circuit localize later with increasing d?
+    """
+    if not os.path.exists(phase3_scaled_path):
+        print(f"  Skipping Fig 15: {phase3_scaled_path} not found")
+        return
+    with open(phase3_scaled_path) as f:
+        data = json.load(f)
+
+    model_order = ['constrained_ln', 'scaled_d32', 'scaled_d64', 'scaled_d128', 'trained_d256']
+    pair_types  = ['mem_a', 'mem_b', 'branch']
+    pt_colors   = {'mem_a': 'steelblue', 'mem_b': 'darkorange', 'branch': 'crimson'}
+
+    fig, ax = plt.subplots(figsize=(9, 4))
+    bar_w = 0.25
+    x_ticks, x_labels = [], []
+
+    for xi, mk in enumerate(model_order):
+        if mk not in data:
+            continue
+        md = data[mk]
+        n_layers = md.get('_meta', {}).get('n_layers', 6)
+        for pi, pt in enumerate(pair_types):
+            pl = md.get(pt, {}).get('peak_layer', n_layers)
+            rel = pl / max(n_layers, 1)
+            bx  = xi + (pi - 1) * bar_w
+            ax.bar(bx, rel, bar_w * 0.9, color=pt_colors[pt],
+                   alpha=0.8, label=pt if xi == 0 else '_nolegend_')
+        x_ticks.append(xi)
+        x_labels.append(mk.replace('_', '\n'))
+
+    ax.set_xticks(x_ticks)
+    ax.set_xticklabels(x_labels, fontsize=8)
+    ax.set_ylim(0, 1.1)
+    ax.set_ylabel('Relative peak layer (0=embed, 1=final)')
+    ax.axhline(1.0, color='gray', linestyle='--', linewidth=0.8, alpha=0.5)
+    ax.set_title('Patching Peak Layer vs Capacity\n(relative depth; 1.0 = final layer)', fontsize=11)
+    ax.legend(title='Pair type', fontsize=8)
+    savefig(fig, output_path)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -824,6 +1014,30 @@ def main():
         os.path.join(R, 'phase3_patching.pkl'),
         os.path.join(R, 'phase5_oracle_patch.pkl'),
         os.path.join(O, 'fig11_constrained_patch.png'),
+    )
+
+    print("Fig 12: Effective rank vs layer")
+    fig12_effective_rank(
+        os.path.join(R, 'phase7_metrics.json'),
+        os.path.join(O, 'fig12_effective_rank.png'),
+    )
+
+    print("Fig 13: RSA heatmap")
+    fig13_rsa_heatmap(
+        os.path.join(R, 'phase7_metrics.json'),
+        os.path.join(O, 'fig13_rsa_heatmap.png'),
+    )
+
+    print("Fig 14: Gini sparsity vs layer")
+    fig14_gini_sparsity(
+        os.path.join(R, 'phase7_metrics.json'),
+        os.path.join(O, 'fig14_gini_sparsity.png'),
+    )
+
+    print("Fig 15: Patching peak layer vs capacity")
+    fig15_patching_peak_vs_d(
+        os.path.join(R, 'phase3_scaled_summary.json'),
+        os.path.join(O, 'fig15_patching_peak_vs_d.png'),
     )
 
     print(f"\nAll figures saved to {O}/")

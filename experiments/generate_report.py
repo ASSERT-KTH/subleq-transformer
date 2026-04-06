@@ -864,6 +864,194 @@ def generate_constrained_patch_section(patch_summary_json, phase2_constrained_js
     return "\n".join(lines)
 
 
+def generate_capacity_scaling_section(phase2_scaled_json, phase3_scaled_json):
+    """Section 6: Capacity scaling sweep results."""
+    lines = []
+    lines.append("## 6. Capacity Scaling Sweep\n")
+
+    if phase2_scaled_json is None:
+        lines.append("*(Capacity scaling results not available)*\n")
+        return "\n".join(lines)
+
+    lines.append("We train `MiniSUBLEQTransformer` (GELU, Pre-LN, n_layers=6, n_heads=8) "
+                 "at four capacity levels: d ∈ {32, 64, 128, 256}, keeping all other "
+                 "hyperparameters fixed (d_ff=4d, 80K steps, lr=3e-4 cosine). "
+                 "d=256 reuses the existing trained model (seeds 0–4); "
+                 "d=32, 64, 128 are trained fresh (seeds 0–2 each).\n")
+
+    lines.append("This isolates **capacity (d)** as the single variable, "
+                 "enabling us to ask: as d shrinks toward the oracle footprint (d=32), "
+                 "does the trained model's circuit become oracle-like?\n")
+
+    # Best probe accuracy table
+    lines.append("### 6.1 Task Accuracy and Probe Quality\n")
+    lines.append("| Model | d | n_layers | PC R² | mem_a R² | branch acc |")
+    lines.append("|-------|---|----------|-------|----------|------------|")
+
+    model_order = ['constrained_ln', 'scaled_d32', 'scaled_d64', 'scaled_d128', 'trained_d256']
+    labels      = {
+        'constrained_ln': 'Constrained-LN (4L,ReLU)',
+        'scaled_d32':     'Scaled d=32 (6L,GELU)',
+        'scaled_d64':     'Scaled d=64 (6L,GELU)',
+        'scaled_d128':    'Scaled d=128 (6L,GELU)',
+        'trained_d256':   'Trained d=256 (6L,GELU)',
+    }
+
+    for mk in model_order:
+        md = phase2_scaled_json.get(mk)
+        if md is None:
+            continue
+        d = md.get('d_model', '?')
+        nl = md.get('n_layers', '?')
+        pm = md.get('probe_means', {})
+
+        def bm(tname):
+            td = pm.get(tname, {})
+            vals = [v['mean'] for v in td.values()
+                    if isinstance(v, dict) and not np.isnan(v.get('mean', float('nan')))]
+            return max(vals) if vals else float('nan')
+
+        pc_r2  = bm('pc')
+        ma_r2  = bm('mem_a')
+        br_acc = bm('branch_taken')
+        lines.append(f"| {labels.get(mk, mk)} | {d} | {nl} | {pc_r2:.3f} | {ma_r2:.3f} | {br_acc:.3f} |")
+    lines.append("")
+
+    # Patching peak layer table
+    if phase3_scaled_json is not None:
+        lines.append("### 6.2 Patching: Peak Causal Layer\n")
+        lines.append("| Model | d | mem_a peak | mem_b peak | branch peak |")
+        lines.append("|-------|---|-----------|-----------|------------|")
+
+        for mk in model_order:
+            md2 = phase3_scaled_json.get(mk)
+            if md2 is None:
+                continue
+            d = phase2_scaled_json.get(mk, {}).get('d_model', '?')
+            n_layers = md2.get('_meta', {}).get('n_layers', 6)
+            row = f"| {labels.get(mk, mk)} | {d} |"
+            for pt in ['mem_a', 'mem_b', 'branch']:
+                pl = md2.get(pt, {}).get('peak_layer', '?')
+                pm_ = md2.get(pt, {}).get('peak_max', float('nan'))
+                row += f" L{pl}/{n_layers} ({pm_:.3f}) |"
+            lines.append(row)
+        lines.append("")
+
+        lines.append("**Key finding**: if all trained models (d=32 through d=256) show "
+                     "final-layer causal localization, the effect is about *learning dynamics* "
+                     "not *capacity*. The oracle's early-layer localization is a property "
+                     "of analytical construction, not an emergent property of gradient descent "
+                     "at any capacity level tested here.\n")
+
+    lines.append("See Figs 10, 12, 14, 15 for the full visual comparison.\n")
+    return "\n".join(lines)
+
+
+def generate_distributional_metrics_section(phase7_json):
+    """Section 7: Effective rank, Gini sparsity, RSA, hypothesis tests."""
+    lines = []
+    lines.append("## 7. Distributional Metrics and Hypothesis Tests\n")
+
+    if phase7_json is None:
+        lines.append("*(Distributional metrics not available)*\n")
+        return "\n".join(lines)
+
+    lines.append("We quantify three aspects of representational geometry across all model variants:\n")
+    lines.append("1. **Effective rank** — how many dimensions carry meaningful variance")
+    lines.append("2. **Gini sparsity** — how concentrated activation energy is")
+    lines.append("3. **RSA** — pairwise representational similarity between models\n")
+
+    # H1: RSA significantly > 0?
+    h1 = phase7_json.get('hypothesis_tests', {}).get(
+        'H1_permutation_constrained_vs_scaled_d32', {})
+    lines.append("### 7.1 H1: Is constrained-LN representationally similar to scaled-d32?\n")
+    lines.append("**Permutation test** (RSA rho at matched layers, 1000 permutations):\n")
+    if h1:
+        sig_layers = [(k, v) for k, v in h1.items() if v.get('p', 1.0) < 0.05]
+        all_rhos = [v['rho'] for v in h1.values() if 'rho' in v]
+        if all_rhos:
+            lines.append(f"- Mean RSA rho across matched layers: {np.mean(all_rhos):.3f}")
+            lines.append(f"- Layers with p < 0.05: {len(sig_layers)}/{len(h1)}\n")
+            if sig_layers:
+                lines.append("Significant similarity detected at the following layer pairs "
+                              "(p < 0.05, one-tailed permutation test): " +
+                              ", ".join(k for k, _ in sig_layers[:3]) + ".\n")
+            else:
+                lines.append("No layer pair reaches significance — constrained-LN and "
+                              "scaled-d32 do not share representational geometry at pos 0.\n")
+    else:
+        lines.append("*(H1 results not available)*\n")
+
+    # H2: RSA decreases with d?
+    h2 = phase7_json.get('hypothesis_tests', {}).get('H2_rsa_vs_d', {})
+    lines.append("### 7.2 H2: Does RSA to constrained-LN decrease as d increases?\n")
+    if h2 and 'data' in h2:
+        lines.append("RSA (final layer, constrained-LN s0 vs scaled_dX s0):\n")
+        lines.append("| d | RSA rho | p |")
+        lines.append("|---|---------|---|")
+        for d, v in sorted(h2.get('data', {}).items(), key=lambda x: int(x[0])):
+            lines.append(f"| {d} | {v.get('rho', float('nan')):.3f} | {v.get('p', float('nan')):.3f} |")
+        lines.append("")
+        rho_trend = h2.get('spearman_rho_of_rhos_vs_logd')
+        p_trend   = h2.get('p')
+        if rho_trend is not None:
+            sig = "significant" if p_trend is not None and p_trend < 0.05 else "not significant"
+            lines.append(f"Trend: Spearman ρ of (log₂d, RSA_rho) = {rho_trend:.3f} "
+                         f"(p={p_trend:.3f}, {sig}). "
+                         + ("RSA decreases with d, suggesting constrained-LN learned "
+                            "geometry moves further from large-capacity models.\n"
+                            if (rho_trend is not None and rho_trend < -0.3) else
+                            "No clear monotonic trend — capacity does not strongly "
+                            "determine representational distance from constrained-LN.\n"))
+    else:
+        lines.append("*(H2 results not available)*\n")
+
+    # H3: Effective rank vs d
+    h3 = phase7_json.get('hypothesis_tests', {}).get('H3_effrank_vs_d', {})
+    lines.append("### 7.3 H3: Does effective rank increase with d?\n")
+    if h3 and 'data' in h3:
+        lines.append("Mean effective rank (averaged over hidden layers, all seeds):\n")
+        lines.append("| d | Eff rank (mean±std) |")
+        lines.append("|---|---------------------|")
+        for d, v in sorted(h3.get('data', {}).items(), key=lambda x: int(x[0])):
+            lines.append(f"| {d} | {v.get('mean', 0):.2f} ± {v.get('std', 0):.2f} |")
+        lines.append("")
+        rho_h3 = h3.get('spearman_rho')
+        p_h3   = h3.get('p_one_sided')
+        if rho_h3 is not None:
+            sig = "significant (p < 0.05)" if p_h3 is not None and p_h3 < 0.05 else "not significant"
+            lines.append(f"Spearman ρ(log₂d, eff_rank) = {rho_h3:.3f} "
+                         f"(one-sided p={p_h3:.4f}, {sig}). "
+                         + ("Higher-capacity models use more of their available "
+                            "dimensions — confirming the hypothesis.\n"
+                            if (rho_h3 is not None and rho_h3 > 0.5) else
+                            "Weak or absent monotonic trend.\n"))
+    else:
+        lines.append("*(H3 results not available)*\n")
+
+    # H4: constrained-LN vs scaled-d32
+    h4 = phase7_json.get('hypothesis_tests', {}).get(
+        'H4_constrained_vs_scaled_d32_effrank', {})
+    lines.append("### 7.4 H4: Does constrained-LN use fewer effective dimensions than scaled-d32?\n")
+    lines.append("Both models have d=32, but constrained-LN has 4 layers + ReLU "
+                 "while scaled-d32 has 6 layers + GELU. Differences in effective rank "
+                 "reveal architectural (not capacity) effects on representational geometry.\n")
+    if h4:
+        sig = [(k, v) for k, v in h4.items() if v.get('sig_bonf', False)]
+        lines.append(f"Bonferroni-corrected t-tests (H_a: constrained-LN < scaled-d32): "
+                     f"{len(sig)}/{len(h4)} layer pairs significant.\n")
+        if sig:
+            for k, v in sig[:3]:
+                lines.append(f"- {k}: constrained={v.get('cln_mean', 0):.2f}, "
+                              f"scaled={v.get('sd32_mean', 0):.2f}, p={v.get('p', 1):.3f}")
+            lines.append("")
+    else:
+        lines.append("*(H4 results not available)*\n")
+
+    lines.append("See Figs 12–14 for the full distributional metric curves.\n")
+    return "\n".join(lines)
+
+
 def generate_additional_section(phase6_loc_json, phase6_dyn_json, phase6_trace_json):
     """Generate Phase 6 additional analyses section."""
     lines = []
@@ -996,7 +1184,10 @@ def main():
     phase6_trace_json = load_json(os.path.join(args.results_dir, 'phase6_failure_trace.json'))
     heldout_json = load_json(os.path.join(args.results_dir, 'phase2_heldout.json'))
     constrained_summary_json = load_json(os.path.join(args.results_dir, 'phase2_constrained_summary.json'))
-    constrained_patch_json = load_json(os.path.join(args.results_dir, 'phase3_constrained_ln_summary.json'))
+    constrained_patch_json  = load_json(os.path.join(args.results_dir, 'phase3_constrained_ln_summary.json'))
+    phase2_scaled_json      = load_json(os.path.join(args.results_dir, 'phase2_scaled_summary.json'))
+    phase3_scaled_json      = load_json(os.path.join(args.results_dir, 'phase3_scaled_summary.json'))
+    phase7_json             = load_json(os.path.join(args.results_dir, 'phase7_metrics.json'))
 
     phase1_pkl = load_pkl(os.path.join(args.results_dir, 'phase1_oracle.pkl'))
     phase2_pkl = load_pkl(os.path.join(args.results_dir, 'phase2_probe_trained.pkl'))
@@ -1015,6 +1206,9 @@ def main():
     print(f"  Held-out probes: {'OK' if heldout_json else 'MISSING'}")
     print(f"  Constrained models: {'OK' if constrained_summary_json else 'MISSING'}")
     print(f"  Constrained patching: {'OK' if constrained_patch_json else 'MISSING'}")
+    print(f"  Scaled probes:        {'OK' if phase2_scaled_json else 'MISSING'}")
+    print(f"  Scaled patching:      {'OK' if phase3_scaled_json else 'MISSING'}")
+    print(f"  Phase 7 metrics:      {'OK' if phase7_json else 'MISSING'}")
 
     # Build report
     report_parts = []
@@ -1188,6 +1382,16 @@ Three types of contrast pairs (1000 each, verified to produce different outputs)
     report_parts.append(generate_failure_section(phase4_json, phase4_pkl))
     report_parts.append(fig_ref('fig9_failure_trace.png',
                                  'Fig 9: Step-by-step failure trace (PC value and correctness per step)'))
+    report_parts.append(generate_capacity_scaling_section(phase2_scaled_json, phase3_scaled_json))
+    report_parts.append(fig_ref('fig12_effective_rank.png',
+                                 'Fig 12: Effective rank of residual stream per layer (all model families)'))
+    report_parts.append(fig_ref('fig13_rsa_heatmap.png',
+                                 'Fig 13: Representational Similarity Analysis heatmap (round2 models)'))
+    report_parts.append(fig_ref('fig14_gini_sparsity.png',
+                                 'Fig 14: Gini sparsity per layer (all model families)'))
+    report_parts.append(fig_ref('fig15_patching_peak_vs_d.png',
+                                 'Fig 15: Peak patching layer (relative depth) vs model capacity'))
+    report_parts.append(generate_distributional_metrics_section(phase7_json))
     report_parts.append(generate_discussion(phase1_json, phase2_json, phase3_json, phase4_json))
 
     report_parts.append("""
