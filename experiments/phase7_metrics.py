@@ -171,12 +171,8 @@ def generate_oracle_inputs(n=2000, seed=42):
     """Generate round1-format inputs for oracle effective rank computation."""
     import random, sys
     sys.path.insert(0, os.path.join(repo_root, 'round1_constructed'))
-    from interpreter import (step as r1_step, MEM_SIZE as R1_MEM, VALUE_OFFSET,
-                              VALUE_MIN as R1_VMIN, VALUE_MAX as R1_VMAX)
-    try:
-        from interpreter import generate_random_state as r1_grs
-    except ImportError:
-        from programs import generate_random_state as r1_grs
+    from interpreter import (step as r1_step, MEM_SIZE as R1_MEM, VALUE_OFFSET)
+    from programs import make_random_program
 
     random.seed(seed)
     inputs = []
@@ -184,7 +180,7 @@ def generate_oracle_inputs(n=2000, seed=42):
     while len(inputs) < n and attempts < n * 20:
         attempts += 1
         try:
-            mem, pc = r1_grs(random.randint(1, 8))
+            mem, pc = make_random_program(n_instr=random.randint(1, 8))
         except Exception:
             continue
         if pc < 0 or pc + 2 >= R1_MEM:

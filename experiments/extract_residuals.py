@@ -99,15 +99,13 @@ def get_r1_residuals(model, inputs, device='cpu'):
 
     with torch.no_grad():
         inputs = inputs.to(device)
-        # The round1 model has a different forward structure
-        # We need to trace through it manually
-        # Get embedding
-        h = model.embed(inputs)  # (N, 417, 32)
+        T = inputs.shape[1]
+        h = model.tok_emb(inputs) + model.pos_emb(
+            torch.arange(T, device=inputs.device))
         residuals[0] = h.cpu()
 
-        for i, (attn, ffn) in enumerate(zip(model.attns, model.ffns)):
-            h = h + attn(h)
-            h = h + ffn(h)
+        for i, layer in enumerate(model.layers):
+            h = layer(h)
             residuals[i + 1] = h.cpu()
 
     return residuals
