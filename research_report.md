@@ -1,7 +1,7 @@
 # Do Transformers Rediscover Correct Computational Circuits?
 ## A Mechanistic Interpretability Study with Ground Truth
 
-*Generated: 2026-04-02 15:35*
+*Generated: 2026-04-07 15:46*
 
 ---
 
@@ -547,6 +547,103 @@ Analysis of first-error steps reveals two failure modes:
 
 ![Fig 9: Step-by-step failure trace (PC value and correctness per step)](experiments/figures/fig9_failure_trace.png)
 *Fig 9: Step-by-step failure trace (PC value and correctness per step)*
+
+## 6. Capacity Scaling Sweep
+
+We train `MiniSUBLEQTransformer` (GELU, Pre-LN, n_layers=6, n_heads=8) at four capacity levels: d ∈ {32, 64, 128, 256}, keeping all other hyperparameters fixed (d_ff=4d, 80K steps, lr=3e-4 cosine). d=256 reuses the existing trained model (seeds 0–4); d=32, 64, 128 are trained fresh (seeds 0–2 each).
+
+This isolates **capacity (d)** as the single variable, enabling us to ask: as d shrinks toward the oracle footprint (d=32), does the trained model's circuit become oracle-like?
+
+### 6.1 Task Accuracy and Probe Quality
+
+| Model | d | n_layers | PC R² | mem_a R² | branch acc |
+|-------|---|----------|-------|----------|------------|
+| Constrained-LN (4L,ReLU) | 32 | 4 | 1.000 | 0.649 | 0.968 |
+| Scaled d=32 (6L,GELU) | 32 | 6 | 1.000 | 0.224 | 0.650 |
+| Scaled d=64 (6L,GELU) | 64 | 6 | 1.000 | 0.860 | 1.000 |
+| Scaled d=128 (6L,GELU) | 128 | 6 | 1.000 | 0.919 | 1.000 |
+| Trained d=256 (6L,GELU) | 256 | 6 | 1.000 | 0.965 | 1.000 |
+
+### 6.2 Patching: Peak Causal Layer
+
+| Model | d | mem_a peak | mem_b peak | branch peak |
+|-------|---|-----------|-----------|------------|
+| Constrained-LN (4L,ReLU) | 32 | L4/4 (0.172) | L4/4 (0.207) | L4/4 (0.447) |
+| Scaled d=32 (6L,GELU) | 32 | L6/6 (0.157) | L6/6 (0.198) | L6/6 (0.420) |
+| Scaled d=64 (6L,GELU) | 64 | L6/6 (0.172) | L6/6 (0.207) | L6/6 (0.447) |
+| Scaled d=128 (6L,GELU) | 128 | L6/6 (0.172) | L6/6 (0.207) | L6/6 (0.447) |
+| Trained d=256 (6L,GELU) | 256 | L6/6 (0.180) | L6/6 (0.183) | L6/6 (0.445) |
+
+**Key finding**: if all trained models (d=32 through d=256) show final-layer causal localization, the effect is about *learning dynamics* not *capacity*. The oracle's early-layer localization is a property of analytical construction, not an emergent property of gradient descent at any capacity level tested here.
+
+See Figs 10, 12, 14, 15 for the full visual comparison.
+
+
+![Fig 12: Effective rank of residual stream per layer (all model families)](experiments/figures/fig12_effective_rank.png)
+*Fig 12: Effective rank of residual stream per layer (all model families)*
+
+
+![Fig 13: Representational Similarity Analysis heatmap (round2 models)](experiments/figures/fig13_rsa_heatmap.png)
+*Fig 13: Representational Similarity Analysis heatmap (round2 models)*
+
+
+![Fig 14: Gini sparsity per layer (all model families)](experiments/figures/fig14_gini_sparsity.png)
+*Fig 14: Gini sparsity per layer (all model families)*
+
+
+![Fig 15: Peak patching layer (relative depth) vs model capacity](experiments/figures/fig15_patching_peak_vs_d.png)
+*Fig 15: Peak patching layer (relative depth) vs model capacity*
+
+## 7. Distributional Metrics and Hypothesis Tests
+
+We quantify three aspects of representational geometry across all model variants:
+
+1. **Effective rank** — how many dimensions carry meaningful variance
+2. **Gini sparsity** — how concentrated activation energy is
+3. **RSA** — pairwise representational similarity between models
+
+### 7.1 H1: Is constrained-LN representationally similar to scaled-d32?
+
+**Permutation test** (RSA rho at matched layers, 1000 permutations):
+
+- Mean RSA rho across matched layers: 0.483
+- Layers with p < 0.05: 5/5
+
+Significant similarity detected at the following layer pairs (p < 0.05, one-tailed permutation test): ref_L0_tgt_L0, ref_L1_tgt_L2, ref_L2_tgt_L3.
+
+### 7.2 H2: Does RSA to constrained-LN decrease as d increases?
+
+RSA (final layer, constrained-LN s0 vs scaled_dX s0):
+
+| d | RSA rho | p |
+|---|---------|---|
+| 32 | 0.376 | 0.000 |
+| 64 | 0.478 | 0.000 |
+| 128 | 0.530 | 0.000 |
+| 256 | 0.492 | 0.000 |
+
+Trend: Spearman ρ of (log₂d, RSA_rho) = 0.800 (p=0.200, not significant). No clear monotonic trend — capacity does not strongly determine representational distance from constrained-LN.
+
+### 7.3 H3: Does effective rank increase with d?
+
+Mean effective rank (averaged over hidden layers, all seeds):
+
+| d | Eff rank (mean±std) |
+|---|---------------------|
+| 32 | 18.16 ± 2.02 |
+| 64 | 27.56 ± 6.23 |
+| 128 | 38.79 ± 10.97 |
+| 256 | 51.18 ± 18.58 |
+
+Spearman ρ(log₂d, eff_rank) = 1.000 (one-sided p=0.0000, significant (p < 0.05)). Higher-capacity models use more of their available dimensions — confirming the hypothesis.
+
+### 7.4 H4: Does constrained-LN use fewer effective dimensions than scaled-d32?
+
+Both models have d=32, but constrained-LN has 4 layers + ReLU while scaled-d32 has 6 layers + GELU. Differences in effective rank reveal architectural (not capacity) effects on representational geometry.
+
+Bonferroni-corrected t-tests (H_a: constrained-LN < scaled-d32): 0/5 layer pairs significant.
+
+See Figs 12–14 for the full distributional metric curves.
 
 ## 8. Discussion
 
